@@ -24,6 +24,7 @@ export async function login(formData: FormData): Promise<{ error: string } | und
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     path: '/',
+    maxAge: 60 * 60 * 12, // matches SESSION_TTL_MS in lib/auth/session.ts
   })
   redirect('/recepcion')
 }

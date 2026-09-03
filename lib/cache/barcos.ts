@@ -1,4 +1,4 @@
-import { ilike } from 'drizzle-orm'
+import { ilike, sql } from 'drizzle-orm'
 import { callKw } from '../odoo/client'
 import { db } from '../../db/client'
 import { barcosCache } from '../../db/schema'
@@ -16,7 +16,9 @@ export async function refreshBarcosCache(): Promise<void> {
     .values(projects.map((p) => ({ odooId: p.id, nombre: p.name })))
     .onConflictDoUpdate({
       target: barcosCache.odooId,
-      set: { nombre: barcosCache.nombre, updatedAt: new Date() },
+      // `excluded.nombre` is the incoming value; `barcosCache.nombre` would
+      // write the column to itself, so a renamed barco never updated.
+      set: { nombre: sql`excluded.nombre`, updatedAt: new Date() },
     })
 }
 

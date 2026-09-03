@@ -2,11 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../odoo/client', () => ({ callKw: vi.fn() }))
 const rows: Array<{ odooId: number; nombre: string }> = []
+const upsert = { set: null as any }
 vi.mock('../../db/client', () => ({
   db: {
     insert: () => ({
       values: (v: any[]) => ({
-        onConflictDoUpdate: async () => { rows.push(...v) },
+        onConflictDoUpdate: async (config: any) => {
+          upsert.set = config.set
+          // Postgres semantics: an existing row keeps whatever the set clause
+          // writes. `excluded.nombre` is the incoming name; the column itself
+          // would be a self-assignment no-op.
+          const takesIncomingNombre = JSON.stringify(config.set?.nombre?.queryChunks ?? [])
+            .includes('excluded.nombre')
+          for (const row of v) {
+            const existing = rows.find((r) => r.odooId === row.odooId)
+            if (!existing) rows.push({ ...row })
+            else if (takesIncomingNombre) existing.nombre = row.nombre
+          }
+        },
       }),
     }),
     select: () => ({
@@ -38,7 +51,7 @@ vi.mock('../../db/client', () => ({
 import { callKw } from '../odoo/client'
 import { refreshBarcosCache, searchBarcos } from './barcos'
 
-beforeEach(() => { rows.length = 0 })
+beforeEach(() => { rows.length = 0; upsert.set = null })
 
 describe('barcos cache', () => {
   it('refreshBarcosCache upserts from project.project', async () => {
@@ -46,6 +59,16 @@ describe('barcos cache', () => {
     await refreshBarcosCache()
     expect(callKw).toHaveBeenCalledWith('project.project', 'search_read', [[]], { fields: ['name'] })
     expect(rows).toEqual([{ odooId: 1, nombre: 'MOONSHADOW' }])
+  })
+
+  it('refreshBarcosCache updates the name of a renamed barco', async () => {
+    vi.mocked(callKw).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
+    await refreshBarcosCache()
+
+    vi.mocked(callKw).mockResolvedValue([{ id: 1, name: 'MOONSHADOW II' }])
+    await refreshBarcosCache()
+
+    expect(rows).toEqual([{ odooId: 1, nombre: 'MOONSHADOW II' }])
   })
 
   it('searchBarcos filters by ilike on nombre', async () => {
