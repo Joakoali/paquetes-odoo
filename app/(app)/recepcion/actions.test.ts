@@ -35,8 +35,40 @@ vi.mock('../../../db/client', () => ({
     update: () => ({ set: (v: any) => ({ where: async () => { Object.assign(state.sesiones[0], v) } }) }),
     query: {
       sesionItems: {
-        findFirst: async ({ where }: any) =>
-          state.items.find((r) => where(r, { eq: (a: any, b: any) => a === b, and: (...c: boolean[]) => c.every(Boolean) })),
+        findFirst: async ({ where }: any) => {
+          // Handle both callback-style and Drizzle condition objects
+          if (typeof where === 'function') {
+            return state.items.find((r) => where(r, { eq: (a: any, b: any) => a === b, and: (...c: boolean[]) => c.every(Boolean) }))
+          }
+
+          // For Drizzle conditions, extract values and match against items
+          const collectValues = (obj: any, collected = new Set<string>()): Set<string> => {
+            if (!obj || typeof obj !== 'object') {
+              if (typeof obj === 'string' && obj !== 'items') collected.add(obj)
+              return collected
+            }
+            for (const key of Object.keys(obj)) {
+              const val = obj[key]
+              if (typeof val === 'string' && val !== 'items') collected.add(val)
+              else if (typeof val === 'object') collectValues(val, collected)
+            }
+            return collected
+          }
+
+          const conditionValues = collectValues(where)
+
+          // Find an item matching the condition values
+          for (const item of state.items) {
+            let matchCount = 0
+            for (const v of conditionValues) {
+              if (Object.values(item).includes(v)) matchCount++
+            }
+            if (matchCount >= 2 || (matchCount > 0 && conditionValues.size <= 1)) {
+              return item
+            }
+          }
+          return undefined
+        },
       },
     },
   },
@@ -60,12 +92,32 @@ describe('recepcion actions', () => {
   it('scanTracking marks ok when not a duplicate', async () => {
     const result = await scanTracking('batch-1', 'T1')
     expect(result.estado).toBe('ok')
+    expect(state.items).toHaveLength(1)
+    expect(state.items[0].trackingNumber).toBe('T1')
+    expect(state.items[0].estado).toBe('ok')
+    expect(state.items[0].courierBatchId).toBe('batch-1')
   })
 
   it('scanTracking marks duplicado when cache says so', async () => {
     vi.mocked(isKnownDuplicate).mockResolvedValue(true)
     const result = await scanTracking('batch-1', 'T2')
     expect(result.estado).toBe('duplicado')
+    expect(state.items).toHaveLength(1)
+    expect(state.items[0].trackingNumber).toBe('T2')
+    expect(state.items[0].estado).toBe('duplicado')
+    expect(state.items[0].courierBatchId).toBe('batch-1')
+  })
+
+  it('scanTracking detects in-session duplicates', async () => {
+    const result1 = await scanTracking('batch-1', 'T1')
+    expect(result1.estado).toBe('ok')
+    expect(state.items).toHaveLength(1)
+
+    const result2 = await scanTracking('batch-1', 'T1')
+    expect(result2.estado).toBe('duplicado')
+    expect(state.items).toHaveLength(2)
+    expect(state.items[1].trackingNumber).toBe('T1')
+    expect(state.items[1].estado).toBe('duplicado')
   })
 
   it('confirmSession transitions state and publishes to the sync queue', async () => {

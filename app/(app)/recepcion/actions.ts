@@ -38,7 +38,7 @@ export async function scanTracking(
   const duplicate = Boolean(alreadyInBatch) || (await isKnownDuplicate(trackingNumber))
   const estado = duplicate ? 'duplicado' : 'ok'
 
-  await db.insert(sesionItems).values({ courierBatchId: batchId, trackingNumber, estado })
+  await db.insert(sesionItems).values({ courierBatchId: batchId, trackingNumber, estado }).returning()
   return { estado }
 }
 
