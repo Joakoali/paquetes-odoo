@@ -10,7 +10,7 @@
     "test:watch": "vitest",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
-    "db:seed": "tsx db/seed.ts"
+    "db:seed": "tsx --env-file=.env db/seed.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
