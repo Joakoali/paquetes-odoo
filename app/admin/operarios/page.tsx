@@ -1,4 +1,4 @@
-import { listOperarios } from '../../../lib/admin/operarios'
+import { listOperarios } from '@/lib/admin/operarios'
 import { createOperarioAction, toggleOperarioActivoAction } from './actions'
 
 export default async function OperariosAdminPage() {
