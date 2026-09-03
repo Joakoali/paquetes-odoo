@@ -1,8 +1,12 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./client', () => ({ callKw: vi.fn() }))
 import { callKw } from './client'
-import { checkDuplicateTrackingNumbers } from './pickings'
+import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking } from './pickings'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 describe('checkDuplicateTrackingNumbers', () => {
   it('returns the tracking numbers already present in Odoo, via one call', async () => {
@@ -24,5 +28,55 @@ describe('checkDuplicateTrackingNumbers', () => {
       ]],
       { fields: ['lot_id'] },
     )
+  })
+})
+
+describe('createIncomingPicking', () => {
+  it('creates a picking with the barco custom field and picking type, in one call', async () => {
+    process.env.ODOO_FIELD_BARCO = 'x_studio_barco'
+    vi.mocked(callKw).mockResolvedValue(501)
+
+    const id = await createIncomingPicking(7, 33)
+
+    expect(id).toBe(501)
+    expect(callKw).toHaveBeenCalledTimes(1)
+    expect(callKw).toHaveBeenCalledWith('stock.picking', 'create', [{
+      picking_type_id: 7,
+      x_studio_barco: 33,
+    }])
+  })
+})
+
+describe('addCourierMoveWithLines', () => {
+  it('creates one move and one batch move.line call for all tracking numbers', async () => {
+    vi.mocked(callKw)
+      .mockResolvedValueOnce(900) // move create
+      .mockResolvedValueOnce([1, 2]) // move.line create (batch)
+
+    const moveId = await addCourierMoveWithLines(501, 15, ['T1', 'T2'])
+
+    expect(moveId).toBe(900)
+    expect(callKw).toHaveBeenNthCalledWith(1, 'stock.move', 'create', [{
+      picking_id: 501,
+      product_id: 15,
+      product_uom_qty: 2,
+      name: 'Recepción webapp',
+    }])
+    expect(callKw).toHaveBeenNthCalledWith(2, 'stock.move.line', 'create', [[
+      { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', qty_done: 1 },
+      { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', qty_done: 1 },
+    ]])
+  })
+})
+
+describe('validatePicking', () => {
+  it('runs confirm, assign, and validate in sequence', async () => {
+    vi.mocked(callKw).mockResolvedValue(true)
+
+    await validatePicking(501)
+
+    expect(callKw).toHaveBeenNthCalledWith(1, 'stock.picking', 'action_confirm', [[501]])
+    expect(callKw).toHaveBeenNthCalledWith(2, 'stock.picking', 'action_assign', [[501]])
+    expect(callKw).toHaveBeenNthCalledWith(3, 'stock.picking', 'button_validate', [[501]])
   })
 })
