@@ -88,8 +88,11 @@ beforeEach(() => {
   dbState.sesion.odooPickingId = null
   dbState.sesion.estado = 'confirmada_pendiente_sync'
   dbState.sesion.ultimoError = null
-  dbState.batches[0].odooMoveId = null
-  dbState.batches[1].odooMoveId = null
+  dbState.batches.length = 0
+  dbState.batches.push(
+    { id: 'b1', sesionId: 's1', courierId: 10, odooMoveId: null },
+    { id: 'b2', sesionId: 's1', courierId: 11, odooMoveId: null },
+  )
   dbState.items.length = 0
   dbState.items.push(
     { id: 'i1', courierBatchId: 'b1', trackingNumber: 'T1', estado: 'ok' },
@@ -175,6 +178,17 @@ describe('syncRecepcionSession', () => {
     // the session closes instead of failing forever, with a note for /pendientes
     expect(dbState.sesion.estado).toBe('sincronizada')
     expect(dbState.sesion.ultimoError).toMatch(/duplicados/)
+  })
+
+  it('finishes an empty session quietly, without the all-duplicates note', async () => {
+    dbState.batches.length = 0
+    dbState.items.length = 0
+
+    await syncRecepcionSession('s1')
+
+    expect(validatePicking).not.toHaveBeenCalled()
+    expect(dbState.sesion.estado).toBe('sincronizada')
+    expect(dbState.sesion.ultimoError).toBeNull()
   })
 
   it('throws a readable error when the picking no longer exists in Odoo', async () => {

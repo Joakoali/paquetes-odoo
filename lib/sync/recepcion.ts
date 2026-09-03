@@ -137,7 +137,9 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     .set({
       estado: 'sincronizada',
       syncedAt: new Date(),
-      ultimoError: anyMove ? null : TODOS_DUPLICADOS,
+      // Only a session that actually HAD packages, all of them duplicates,
+      // gets the note. An empty session just finishes quietly.
+      ultimoError: !anyMove && allTracking.length > 0 ? TODOS_DUPLICADOS : null,
     })
     .where(eq(sesionesEscaneo.id, sesionId))
 }

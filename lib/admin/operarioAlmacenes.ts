@@ -23,12 +23,17 @@ export async function operarioHasAlmacen(operarioId: string, almacenId: number):
 }
 
 export async function setAlmacenesForOperario(operarioId: string, almacenIds: number[]): Promise<void> {
+  const del = db.delete(operarioAlmacenes).where(eq(operarioAlmacenes.operarioId, operarioId))
+  if (almacenIds.length === 0) {
+    await del
+    return
+  }
+
   // Delete-then-insert must be atomic: a failure between the two would leave
-  // the operario with no almacenes at all.
-  await db.transaction(async (tx) => {
-    await tx.delete(operarioAlmacenes).where(eq(operarioAlmacenes.operarioId, operarioId))
-    if (almacenIds.length > 0) {
-      await tx.insert(operarioAlmacenes).values(almacenIds.map((almacenId) => ({ operarioId, almacenId })))
-    }
-  })
+  // the operario with no almacenes at all. `db.batch` is neon-http's atomic
+  // primitive — the driver has no `transaction()` (it throws outright).
+  await db.batch([
+    del,
+    db.insert(operarioAlmacenes).values(almacenIds.map((almacenId) => ({ operarioId, almacenId }))),
+  ])
 }

@@ -7,22 +7,30 @@ const almacenRows = [
 ]
 
 vi.mock('../../db/client', () => {
-  const writer = {
-    delete: () => ({
-      where: async () => {
-        // Remove ALL matching rows. In real Drizzle, delete().where() removes all matches.
-        // Test controls which rows exist; here we clear all since test only uses one operario.
-        links.length = 0
+  // Drizzle statements are lazy: they run when awaited, or when db.batch()
+  // executes them in order. The neon-http driver has NO transaction() — it
+  // throws — so the mock deliberately does not provide one.
+  const statement = (run: () => void) => {
+    let done = false
+    const exec = () => { if (!done) { done = true; run() } }
+    return {
+      exec,
+      then: (onFulfilled: any, onRejected: any) => {
+        exec()
+        return Promise.resolve().then(onFulfilled, onRejected)
       },
-    }),
-    insert: () => ({ values: (rows: any[]) => ({ then: (r: any) => Promise.resolve(links.push(...rows)).then(r) }) }),
+    }
   }
+
   return {
     db: {
-      ...writer,
-      // neon-http batches the callback's statements into one transaction; for the
-      // test it is enough that both writes go through the same writer.
-      transaction: async (fn: any) => fn(writer),
+      delete: () => ({
+        // Remove ALL matching rows. In real Drizzle, delete().where() removes all matches.
+        // Test controls which rows exist; here we clear all since test only uses one operario.
+        where: () => statement(() => { links.length = 0 }),
+      }),
+      insert: () => ({ values: (rows: any[]) => statement(() => { links.push(...rows) }) }),
+      batch: async (statements: any[]) => { for (const s of statements) s.exec() },
       query: {
         operarioAlmacenes: {
           // Test controls the links array; mock ignores where-expression entirely
@@ -73,6 +81,12 @@ describe('operario almacenes', () => {
     // Verify retrieval returns only almacen 2
     const result = await getAlmacenesForOperario('op-1')
     expect(result).toEqual([almacenRows[1]])
+  })
+
+  it('clears every assignment when given an empty list', async () => {
+    await setAlmacenesForOperario('op-1', [1, 2])
+    await setAlmacenesForOperario('op-1', [])
+    expect(links).toEqual([])
   })
 
   it('operarioHasAlmacen is true only for an assigned almacen', async () => {
