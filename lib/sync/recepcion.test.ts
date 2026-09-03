@@ -1,0 +1,90 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('../odoo/pickings', () => ({
+  checkDuplicateTrackingNumbers: vi.fn(),
+  createIncomingPicking: vi.fn(),
+  addCourierMoveWithLines: vi.fn(),
+  validatePicking: vi.fn(),
+}))
+vi.mock('../odoo/client', () => ({ callKw: vi.fn() }))
+vi.mock('../cache/trackingActivos', () => ({ recordSyncedTracking: vi.fn() }))
+
+const dbState = {
+  sesion: {
+    id: 's1', almacenId: 1, barcoOdooId: 33, odooPickingId: null as number | null,
+    estado: 'confirmada_pendiente_sync', intentos: 0,
+  },
+  almacen: { id: 1, odooPickingTypeId: 7 },
+  batches: [
+    { id: 'b1', sesionId: 's1', courierId: 10, odooMoveId: null as number | null },
+    { id: 'b2', sesionId: 's1', courierId: 11, odooMoveId: null as number | null },
+  ],
+  courierProductIds: { 10: 100, 11: 101 } as Record<number, number>,
+  items: [
+    { id: 'i1', courierBatchId: 'b1', trackingNumber: 'T1', estado: 'ok' },
+    { id: 'i2', courierBatchId: 'b2', trackingNumber: 'T2', estado: 'ok' },
+  ],
+}
+
+vi.mock('../../db/client', () => ({
+  db: {
+    query: {
+      sesionesEscaneo: { findFirst: async () => dbState.sesion },
+      almacenes: { findFirst: async () => dbState.almacen },
+      sesionCourierBatches: { findMany: async ({ where }: any) =>
+        dbState.batches.filter((b) => where(b, { eq: (a: any, b2: any) => a === b2 })) },
+      couriers: { findFirst: async ({ where }: any) => {
+        const id = Object.keys(dbState.courierProductIds).find((k) =>
+          where({ id: Number(k) }, { eq: (a: any, b2: any) => a === b2 }))
+        return id ? { id: Number(id), odooProductId: dbState.courierProductIds[Number(id)] } : undefined
+      } },
+      sesionItems: { findMany: async ({ where }: any) =>
+        dbState.items.filter((i) => where(i, { eq: (a: any, b2: any) => a === b2 })) },
+    },
+    update: () => ({ set: (v: any) => ({ where: async () => { Object.assign(dbState.sesion, v) } }) }),
+    insert: () => ({ values: async () => {} }),
+  },
+}))
+
+import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking } from '../odoo/pickings'
+import { callKw } from '../odoo/client'
+import { syncRecepcionSession } from './recepcion'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  dbState.sesion.odooPickingId = null
+  dbState.sesion.estado = 'confirmada_pendiente_sync'
+  dbState.batches[0].odooMoveId = null
+  dbState.batches[1].odooMoveId = null
+  vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue([])
+  vi.mocked(createIncomingPicking).mockResolvedValue(501)
+  vi.mocked(addCourierMoveWithLines).mockResolvedValue(900)
+  vi.mocked(validatePicking).mockResolvedValue(undefined)
+  vi.mocked(callKw).mockResolvedValue(undefined)
+})
+
+describe('syncRecepcionSession', () => {
+  it('creates the picking, adds both courier batches in batch calls, and validates', async () => {
+    await syncRecepcionSession('s1')
+
+    expect(createIncomingPicking).toHaveBeenCalledWith(7, 33)
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 100, ['T1'])
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+    expect(validatePicking).toHaveBeenCalledWith(501)
+    expect(dbState.sesion.estado).toBe('sincronizada')
+  })
+
+  it('does not re-create the picking on retry (idempotent)', async () => {
+    dbState.sesion.odooPickingId = 501
+    await syncRecepcionSession('s1')
+    expect(createIncomingPicking).not.toHaveBeenCalled()
+  })
+
+  it('skips a batch that already has an odoo_move_id on retry', async () => {
+    dbState.sesion.odooPickingId = 501
+    dbState.batches[0].odooMoveId = 900
+    await syncRecepcionSession('s1')
+    expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+  })
+})
