@@ -1,35 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const links: Array<{ operarioId: string; almacenId: number }> = []
-const almacenRows = [{ id: 1, prefijo: 'MB92', nombre: 'Barcelona', odooPickingTypeId: null }]
+const almacenRows = [
+  { id: 1, prefijo: 'MB92', nombre: 'Barcelona', odooPickingTypeId: null },
+  { id: 2, prefijo: 'MAD1', nombre: 'Madrid', odooPickingTypeId: null },
+]
 
 vi.mock('../../db/client', () => ({
   db: {
     query: {
       operarioAlmacenes: {
-        findMany: async ({ where }: any) => {
-          if (!where) return links
-          // Handle Drizzle eq() expression: eq() returns an object with details about the comparison
-          // For simplified mocking, extract the value being compared
-          if (typeof where === 'object' && where.right !== undefined) {
-            return links.filter((l) => l.operarioId === where.right)
-          }
-          return links
-        },
+        // Test controls the links array; mock ignores where-expression entirely
+        findMany: async () => links,
       },
     },
     delete: () => ({
-      where: async (whereExpr: any) => {
-        if (whereExpr && whereExpr.right !== undefined) {
-          const idx = links.findIndex((l) => l.operarioId === whereExpr.right)
-          if (idx >= 0) links.splice(idx, 1)
-        } else {
-          links.length = 0
-        }
+      where: async () => {
+        // Remove ALL matching rows. In real Drizzle, delete().where() removes all matches.
+        // Test controls which rows exist; here we clear all since test only uses one operario.
+        links.length = 0
       },
     }),
     insert: () => ({ values: (rows: any[]) => ({ then: (r: any) => Promise.resolve(links.push(...rows)).then(r) }) }),
-    select: () => ({ from: () => ({ where: async () => almacenRows }) }),
+    select: () => ({
+      from: () => ({
+        where: async () => {
+          // Filter almacenRows to only those with IDs in current links array
+          const almacenIdsInUse = new Set(links.map((l) => l.almacenId))
+          return almacenRows.filter((a) => almacenIdsInUse.has(a.id))
+        },
+      }),
+    }),
   },
 }))
 
@@ -42,6 +43,23 @@ describe('operario almacenes', () => {
     await setAlmacenesForOperario('op-1', [1])
     expect(links).toEqual([{ operarioId: 'op-1', almacenId: 1 }])
     const result = await getAlmacenesForOperario('op-1')
-    expect(result).toEqual(almacenRows)
+    expect(result).toEqual([almacenRows[0]])
+  })
+
+  it('replaces previous assignments when called again', async () => {
+    // First assignment: [1, 2]
+    await setAlmacenesForOperario('op-1', [1, 2])
+    expect(links).toEqual([
+      { operarioId: 'op-1', almacenId: 1 },
+      { operarioId: 'op-1', almacenId: 2 },
+    ])
+
+    // Replace with: [2]
+    await setAlmacenesForOperario('op-1', [2])
+    expect(links).toEqual([{ operarioId: 'op-1', almacenId: 2 }])
+
+    // Verify retrieval returns only almacen 2
+    const result = await getAlmacenesForOperario('op-1')
+    expect(result).toEqual([almacenRows[1]])
   })
 })
