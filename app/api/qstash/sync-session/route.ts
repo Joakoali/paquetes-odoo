@@ -4,6 +4,7 @@ import { verifyQstashSignature } from '@/lib/queue/verify'
 import { db } from '@/db/client'
 import { sesionesEscaneo } from '@/db/schema'
 import { syncRecepcionSession } from '@/lib/sync/recepcion'
+import { syncEntregaSession } from '@/lib/sync/entrega'
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = await request.text()
@@ -25,6 +26,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     if (sesion.tipo === 'recepcion') {
       await syncRecepcionSession(sesionId)
+    } else {
+      await syncEntregaSession(sesionId)
     }
     return NextResponse.json({ ok: true })
   } catch (err) {
