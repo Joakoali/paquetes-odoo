@@ -1,8 +1,10 @@
 import { db } from '@/db/client'
 import { almacenes, couriers } from '@/db/schema'
+import { requireAdminFromCookies } from '@/lib/auth/current-operario'
 import { updateAlmacenMappingAction, updateCourierMappingAction } from './actions'
 
 export default async function MapeosPage() {
+  await requireAdminFromCookies()
   const [allAlmacenes, allCouriers] = await Promise.all([
     db.select().from(almacenes),
     db.select().from(couriers),

@@ -11,9 +11,24 @@ export async function getAlmacenesForOperario(operarioId: string): Promise<Almac
   return db.select().from(almacenes).where(inArray(almacenes.id, ids))
 }
 
+/**
+ * Server-side authorization check for spec §6: an operario may only work in the
+ * almacenes assigned to them. The UI merely hides the others.
+ */
+export async function operarioHasAlmacen(operarioId: string, almacenId: number): Promise<boolean> {
+  const row = await db.query.operarioAlmacenes.findFirst({
+    where: (l, { and, eq: e }) => and(e(l.operarioId, operarioId), e(l.almacenId, almacenId)),
+  })
+  return row !== undefined && row !== null
+}
+
 export async function setAlmacenesForOperario(operarioId: string, almacenIds: number[]): Promise<void> {
-  await db.delete(operarioAlmacenes).where(eq(operarioAlmacenes.operarioId, operarioId))
-  if (almacenIds.length > 0) {
-    await db.insert(operarioAlmacenes).values(almacenIds.map((almacenId) => ({ operarioId, almacenId })))
-  }
+  // Delete-then-insert must be atomic: a failure between the two would leave
+  // the operario with no almacenes at all.
+  await db.transaction(async (tx) => {
+    await tx.delete(operarioAlmacenes).where(eq(operarioAlmacenes.operarioId, operarioId))
+    if (almacenIds.length > 0) {
+      await tx.insert(operarioAlmacenes).values(almacenIds.map((almacenId) => ({ operarioId, almacenId })))
+    }
+  })
 }

@@ -6,14 +6,8 @@ const almacenRows = [
   { id: 2, prefijo: 'MAD1', nombre: 'Madrid', odooPickingTypeId: null },
 ]
 
-vi.mock('../../db/client', () => ({
-  db: {
-    query: {
-      operarioAlmacenes: {
-        // Test controls the links array; mock ignores where-expression entirely
-        findMany: async () => links,
-      },
-    },
+vi.mock('../../db/client', () => {
+  const writer = {
     delete: () => ({
       where: async () => {
         // Remove ALL matching rows. In real Drizzle, delete().where() removes all matches.
@@ -22,19 +16,37 @@ vi.mock('../../db/client', () => ({
       },
     }),
     insert: () => ({ values: (rows: any[]) => ({ then: (r: any) => Promise.resolve(links.push(...rows)).then(r) }) }),
-    select: () => ({
-      from: () => ({
-        where: async () => {
-          // Filter almacenRows to only those with IDs in current links array
-          const almacenIdsInUse = new Set(links.map((l) => l.almacenId))
-          return almacenRows.filter((a) => almacenIdsInUse.has(a.id))
+  }
+  return {
+    db: {
+      ...writer,
+      // neon-http batches the callback's statements into one transaction; for the
+      // test it is enough that both writes go through the same writer.
+      transaction: async (fn: any) => fn(writer),
+      query: {
+        operarioAlmacenes: {
+          // Test controls the links array; mock ignores where-expression entirely
+          findMany: async () => links,
+          findFirst: async ({ where }: any) => links.find((l) => where(l, {
+            eq: (a: any, b: any) => a === b,
+            and: (...c: boolean[]) => c.every(Boolean),
+          })),
         },
+      },
+      select: () => ({
+        from: () => ({
+          where: async () => {
+            // Filter almacenRows to only those with IDs in current links array
+            const almacenIdsInUse = new Set(links.map((l) => l.almacenId))
+            return almacenRows.filter((a) => almacenIdsInUse.has(a.id))
+          },
+        }),
       }),
-    }),
-  },
-}))
+    },
+  }
+})
 
-import { getAlmacenesForOperario, setAlmacenesForOperario } from './operarioAlmacenes'
+import { getAlmacenesForOperario, setAlmacenesForOperario, operarioHasAlmacen } from './operarioAlmacenes'
 
 beforeEach(() => { links.length = 0 })
 
@@ -61,5 +73,12 @@ describe('operario almacenes', () => {
     // Verify retrieval returns only almacen 2
     const result = await getAlmacenesForOperario('op-1')
     expect(result).toEqual([almacenRows[1]])
+  })
+
+  it('operarioHasAlmacen is true only for an assigned almacen', async () => {
+    await setAlmacenesForOperario('op-1', [1])
+    expect(await operarioHasAlmacen('op-1', 1)).toBe(true)
+    expect(await operarioHasAlmacen('op-1', 2)).toBe(false)
+    expect(await operarioHasAlmacen('op-2', 1)).toBe(false)
   })
 })

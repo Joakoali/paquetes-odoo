@@ -1,7 +1,9 @@
 import { listOperarios } from '@/lib/admin/operarios'
+import { requireAdminFromCookies } from '@/lib/auth/current-operario'
 import { createOperarioAction, toggleOperarioActivoAction } from './actions'
 
 export default async function OperariosAdminPage() {
+  await requireAdminFromCookies()
   const operarios = await listOperarios()
   return (
     <main>

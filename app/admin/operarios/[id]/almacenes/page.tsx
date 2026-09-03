@@ -1,9 +1,11 @@
 import { db } from '@/db/client'
 import { almacenes } from '@/db/schema'
 import { getAlmacenesForOperario } from '@/lib/admin/operarioAlmacenes'
+import { requireAdminFromCookies } from '@/lib/auth/current-operario'
 import { updateAlmacenesAction } from './actions'
 
 export default async function OperarioAlmacenesPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireAdminFromCookies()
   const { id } = await params
   const [all, assigned] = await Promise.all([
     db.select().from(almacenes),
