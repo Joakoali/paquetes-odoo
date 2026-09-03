@@ -6,6 +6,10 @@ import { sesionesEscaneo } from '@/db/schema'
 import { syncRecepcionSession } from '@/lib/sync/recepcion'
 import { syncEntregaSession } from '@/lib/sync/entrega'
 
+// A session can hold dozens of packages, each an Odoo round trip throttled to
+// ~1 req/s — well past Vercel's default function timeout.
+export const maxDuration = 300
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = await request.text()
   const signature = request.headers.get('upstash-signature') ?? ''

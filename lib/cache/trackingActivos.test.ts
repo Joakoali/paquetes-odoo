@@ -21,13 +21,20 @@ vi.mock('../../db/client', () => ({
     },
     insert: () => ({
       values: (v: any) => ({
-        onConflictDoUpdate: async () => { rows.push(v) },
+        onConflictDoUpdate: async () => {
+          // Real Drizzle takes either one row or an array of rows.
+          for (const row of Array.isArray(v) ? v : [v]) {
+            const existing = rows.find((r) => r.trackingNumber === row.trackingNumber)
+            if (existing) Object.assign(existing, row)
+            else rows.push(row)
+          }
+        },
       }),
     }),
   },
 }))
 
-import { isKnownDuplicate, recordSyncedTracking } from './trackingActivos'
+import { isKnownDuplicate, recordSyncedTracking, recordSyncedTrackings } from './trackingActivos'
 
 beforeEach(() => { rows.length = 0 })
 
@@ -47,5 +54,20 @@ describe('tracking activos cache', () => {
     expect(await isKnownDuplicate('ABC')).toBe(true)
     expect(await isKnownDuplicate('XYZ')).toBe(true)
     expect(await isKnownDuplicate('DEF')).toBe(false)
+  })
+
+  it('recordSyncedTrackings upserts every pair in one call', async () => {
+    await recordSyncedTrackings([
+      { trackingNumber: 'ABC', odooPickingId: 501 },
+      { trackingNumber: 'XYZ', odooPickingId: 501 },
+    ])
+    expect(rows).toHaveLength(2)
+    expect(await isKnownDuplicate('ABC')).toBe(true)
+    expect(await isKnownDuplicate('XYZ')).toBe(true)
+  })
+
+  it('recordSyncedTrackings is a no-op for an empty list', async () => {
+    await recordSyncedTrackings([])
+    expect(rows).toHaveLength(0)
   })
 })

@@ -7,12 +7,12 @@ vi.mock('../odoo/pickings', () => ({
   validatePicking: vi.fn(),
 }))
 vi.mock('../odoo/client', () => ({ callKw: vi.fn() }))
-vi.mock('../cache/trackingActivos', () => ({ recordSyncedTracking: vi.fn() }))
+vi.mock('../cache/trackingActivos', () => ({ recordSyncedTrackings: vi.fn() }))
 
 const dbState = {
   sesion: {
     id: 's1', almacenId: 1, barcoOdooId: 33, odooPickingId: null as number | null,
-    estado: 'confirmada_pendiente_sync', intentos: 0,
+    estado: 'confirmada_pendiente_sync', intentos: 0, ultimoError: null as string | null,
   },
   almacen: { id: 1, odooPickingTypeId: 7 },
   batches: [
@@ -26,23 +26,29 @@ const dbState = {
   ],
 }
 
+// The relational-query helpers the worker passes to its `where` callbacks.
+const ops = {
+  eq: (a: any, b: any) => a === b,
+  ne: (a: any, b: any) => a !== b,
+  and: (...c: boolean[]) => c.every(Boolean),
+}
+
 vi.mock('../../db/client', () => ({
   db: {
     query: {
       sesionesEscaneo: { findFirst: async () => dbState.sesion },
       almacenes: { findFirst: async () => dbState.almacen },
       sesionCourierBatches: { findMany: async ({ where }: any) =>
-        dbState.batches.filter((b) => where(b, { eq: (a: any, b2: any) => a === b2 })) },
+        dbState.batches.filter((b) => where(b, ops)) },
       couriers: { findFirst: async ({ where }: any) => {
-        const id = Object.keys(dbState.courierProductIds).find((k) =>
-          where({ id: Number(k) }, { eq: (a: any, b2: any) => a === b2 }))
+        const id = Object.keys(dbState.courierProductIds).find((k) => where({ id: Number(k) }, ops))
         return id ? { id: Number(id), odooProductId: dbState.courierProductIds[Number(id)] } : undefined
       } },
       sesionItems: { findMany: async ({ where }: any) =>
-        dbState.items.filter((i) => where(i, { eq: (a: any, b2: any) => a === b2 })) },
+        dbState.items.filter((i) => where(i, ops)) },
     },
     // Best-effort: pull every string literal out of the drizzle where-expression
-    // so an update scoped to a sesion_items row can be routed to that item.
+    // so an update scoped to sesion_items rows can be routed to those items.
     update: () => ({
       set: (v: any) => ({
         where: async (cond: any) => {
@@ -56,9 +62,12 @@ vi.mock('../../db/client', () => ({
             for (const k of Object.keys(o)) walk(o[k])
           }
           walk(cond)
-          const matched = dbState.items.filter((i) => vals.has(i.trackingNumber) && vals.has(i.courierBatchId))
-          if (matched.length > 0) {
-            for (const i of matched) Object.assign(i, v)
+          const matchedItems = dbState.items.filter((i) => vals.has(i.trackingNumber) && vals.has(i.courierBatchId))
+          const matchedBatches = dbState.batches.filter((b) => vals.has(b.id) && 'odooMoveId' in v)
+          if (matchedItems.length > 0) {
+            for (const i of matchedItems) Object.assign(i, v)
+          } else if (matchedBatches.length > 0) {
+            for (const b of matchedBatches) Object.assign(b, v)
           } else {
             Object.assign(dbState.sesion, v)
           }
@@ -70,6 +79,7 @@ vi.mock('../../db/client', () => ({
 }))
 
 import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking } from '../odoo/pickings'
+import { recordSyncedTrackings } from '../cache/trackingActivos'
 import { callKw } from '../odoo/client'
 import { syncRecepcionSession } from './recepcion'
 
@@ -77,10 +87,14 @@ beforeEach(() => {
   vi.clearAllMocks()
   dbState.sesion.odooPickingId = null
   dbState.sesion.estado = 'confirmada_pendiente_sync'
+  dbState.sesion.ultimoError = null
   dbState.batches[0].odooMoveId = null
   dbState.batches[1].odooMoveId = null
-  dbState.items[0].estado = 'ok'
-  dbState.items[1].estado = 'ok'
+  dbState.items.length = 0
+  dbState.items.push(
+    { id: 'i1', courierBatchId: 'b1', trackingNumber: 'T1', estado: 'ok' },
+    { id: 'i2', courierBatchId: 'b2', trackingNumber: 'T2', estado: 'ok' },
+  )
   vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue([])
   vi.mocked(createIncomingPicking).mockResolvedValue(501)
   vi.mocked(addCourierMoveWithLines).mockResolvedValue(900)
@@ -100,10 +114,22 @@ describe('syncRecepcionSession', () => {
     expect(dbState.sesion.estado).toBe('sincronizada')
   })
 
+  it('records the synced tracking numbers in one bulk upsert per batch', async () => {
+    await syncRecepcionSession('s1')
+    expect(recordSyncedTrackings).toHaveBeenCalledTimes(2)
+    expect(recordSyncedTrackings).toHaveBeenCalledWith([{ trackingNumber: 'T1', odooPickingId: 501 }])
+  })
+
   it('does not re-create the picking on retry (idempotent)', async () => {
     dbState.sesion.odooPickingId = 501
     await syncRecepcionSession('s1')
     expect(createIncomingPicking).not.toHaveBeenCalled()
+  })
+
+  it('checks live duplicates once for the whole session, not once per batch', async () => {
+    await syncRecepcionSession('s1')
+    expect(checkDuplicateTrackingNumbers).toHaveBeenCalledTimes(1)
+    expect(checkDuplicateTrackingNumbers).toHaveBeenCalledWith(['T1', 'T2'])
   })
 
   it('excludes a live-duplicate tracking, marks it duplicado, and syncs the rest', async () => {
@@ -121,11 +147,38 @@ describe('syncRecepcionSession', () => {
     expect(dbState.sesion.estado).toBe('sincronizada')
   })
 
+  it('never pushes an item already flagged duplicado at scan time', async () => {
+    dbState.items[0].estado = 'duplicado'
+
+    await syncRecepcionSession('s1')
+
+    expect(checkDuplicateTrackingNumbers).toHaveBeenCalledWith(['T2'])
+    expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+  })
+
   it('skips a batch that already has an odoo_move_id on retry', async () => {
     dbState.sesion.odooPickingId = 501
     dbState.batches[0].odooMoveId = 900
     await syncRecepcionSession('s1')
     expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
     expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+  })
+
+  it('does not validate a move-less picking when every tracking is a duplicate', async () => {
+    vi.mocked(checkDuplicateTrackingNumbers).mockImplementation(async (tns) => tns)
+
+    await syncRecepcionSession('s1')
+
+    expect(addCourierMoveWithLines).not.toHaveBeenCalled()
+    expect(validatePicking).not.toHaveBeenCalled()
+    // the session closes instead of failing forever, with a note for /pendientes
+    expect(dbState.sesion.estado).toBe('sincronizada')
+    expect(dbState.sesion.ultimoError).toMatch(/duplicados/)
+  })
+
+  it('throws a readable error when the picking no longer exists in Odoo', async () => {
+    vi.mocked(callKw).mockResolvedValue([] as never)
+    await expect(syncRecepcionSession('s1')).rejects.toThrow(/no existe en Odoo/)
   })
 })
