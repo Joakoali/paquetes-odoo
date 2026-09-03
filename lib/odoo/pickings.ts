@@ -34,11 +34,15 @@ export async function addCourierMoveWithLines(
   courierProductId: number,
   trackingNumbers: string[],
 ): Promise<number> {
+  // TODO(task-22): confirmar contra la base de pruebas de Odoo 19. `qty_done`
+  // desapareció en Odoo 17 (ahora `quantity` en stock.move.line) y el flag
+  // `picked` puede tener que ir en la línea en vez de en el movimiento.
   const moveId = await callKw<number>('stock.move', 'create', [{
     picking_id: pickingId,
     product_id: courierProductId,
     product_uom_qty: trackingNumbers.length,
     name: 'Recepción webapp',
+    picked: true,
   }])
 
   await callKw<number[]>('stock.move.line', 'create', [
@@ -47,7 +51,7 @@ export async function addCourierMoveWithLines(
       picking_id: pickingId,
       product_id: courierProductId,
       lot_name,
-      qty_done: 1,
+      quantity: 1,
     })),
   ])
 

@@ -58,4 +58,14 @@ describe('syncEntregaSession', () => {
     expect(validatePicking).not.toHaveBeenCalledWith(700)
     expect(validatePicking).toHaveBeenCalledWith(701)
   })
+
+  it('throws a readable error when the picking no longer exists in Odoo', async () => {
+    vi.mocked(callKw).mockImplementation(async (model: string, method: string) => {
+      if (model === 'stock.picking' && method === 'read') return []
+      return undefined
+    })
+
+    await expect(syncEntregaSession('s1')).rejects.toThrow(/no existe en Odoo/)
+    expect(validatePicking).not.toHaveBeenCalled()
+  })
 })

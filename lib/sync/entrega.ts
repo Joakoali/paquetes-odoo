@@ -25,6 +25,7 @@ export async function syncEntregaSession(sesionId: string): Promise<void> {
     const [current] = await callKw<Array<{ id: number; state: string }>>(
       'stock.picking', 'read', [[pickingId]], { fields: ['state'] },
     )
+    if (!current) throw new Error(`picking ${pickingId} no existe en Odoo`)
     if (current.state === 'done') continue
 
     await callKw('stock.picking', 'write', [[pickingId], {

@@ -61,10 +61,11 @@ describe('addCourierMoveWithLines', () => {
       product_id: 15,
       product_uom_qty: 2,
       name: 'Recepción webapp',
+      picked: true,
     }])
     expect(callKw).toHaveBeenNthCalledWith(2, 'stock.move.line', 'create', [[
-      { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', qty_done: 1 },
-      { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', qty_done: 1 },
+      { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1 },
+      { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1 },
     ]])
   })
 })
