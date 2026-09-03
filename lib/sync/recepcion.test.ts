@@ -41,7 +41,30 @@ vi.mock('../../db/client', () => ({
       sesionItems: { findMany: async ({ where }: any) =>
         dbState.items.filter((i) => where(i, { eq: (a: any, b2: any) => a === b2 })) },
     },
-    update: () => ({ set: (v: any) => ({ where: async () => { Object.assign(dbState.sesion, v) } }) }),
+    // Best-effort: pull every string literal out of the drizzle where-expression
+    // so an update scoped to a sesion_items row can be routed to that item.
+    update: () => ({
+      set: (v: any) => ({
+        where: async (cond: any) => {
+          const vals = new Set<string>()
+          const seen = new Set<any>()
+          const walk = (o: any) => {
+            if (o == null || seen.has(o)) return
+            if (typeof o === 'string') { vals.add(o); return }
+            if (typeof o !== 'object') return
+            seen.add(o)
+            for (const k of Object.keys(o)) walk(o[k])
+          }
+          walk(cond)
+          const matched = dbState.items.filter((i) => vals.has(i.trackingNumber) && vals.has(i.courierBatchId))
+          if (matched.length > 0) {
+            for (const i of matched) Object.assign(i, v)
+          } else {
+            Object.assign(dbState.sesion, v)
+          }
+        },
+      }),
+    }),
     insert: () => ({ values: async () => {} }),
   },
 }))
@@ -56,11 +79,14 @@ beforeEach(() => {
   dbState.sesion.estado = 'confirmada_pendiente_sync'
   dbState.batches[0].odooMoveId = null
   dbState.batches[1].odooMoveId = null
+  dbState.items[0].estado = 'ok'
+  dbState.items[1].estado = 'ok'
   vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue([])
   vi.mocked(createIncomingPicking).mockResolvedValue(501)
   vi.mocked(addCourierMoveWithLines).mockResolvedValue(900)
   vi.mocked(validatePicking).mockResolvedValue(undefined)
-  vi.mocked(callKw).mockResolvedValue(undefined)
+  // stock.picking.read('state') returns a non-terminal state by default.
+  vi.mocked(callKw).mockResolvedValue([{ state: 'assigned' }] as never)
 })
 
 describe('syncRecepcionSession', () => {
@@ -78,6 +104,21 @@ describe('syncRecepcionSession', () => {
     dbState.sesion.odooPickingId = 501
     await syncRecepcionSession('s1')
     expect(createIncomingPicking).not.toHaveBeenCalled()
+  })
+
+  it('excludes a live-duplicate tracking, marks it duplicado, and syncs the rest', async () => {
+    vi.mocked(checkDuplicateTrackingNumbers).mockImplementation(async (tns) =>
+      tns.filter((t) => t === 'T1'))
+
+    await syncRecepcionSession('s1')
+
+    // b1's only tracking (T1) is a live duplicate -> no move for its product (100)
+    expect(addCourierMoveWithLines).not.toHaveBeenCalledWith(501, 100, expect.anything())
+    // b2 is untouched by the duplicate and still syncs
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+    // the offending item is marked locally, session still completes
+    expect(dbState.items.find((i) => i.trackingNumber === 'T1')!.estado).toBe('duplicado')
+    expect(dbState.sesion.estado).toBe('sincronizada')
   })
 
   it('skips a batch that already has an odoo_move_id on retry', async () => {

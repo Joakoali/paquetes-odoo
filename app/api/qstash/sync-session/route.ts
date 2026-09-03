@@ -12,7 +12,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'invalid signature' }, { status: 401 })
   }
 
-  const { sesionId } = JSON.parse(body) as { sesionId: string }
+  let sesionId: string
+  try {
+    ;({ sesionId } = JSON.parse(body) as { sesionId: string })
+  } catch {
+    return NextResponse.json({ error: 'invalid body' }, { status: 400 })
+  }
+
   const sesion = await db.query.sesionesEscaneo.findFirst({ where: eq(sesionesEscaneo.id, sesionId) })
   if (!sesion) return NextResponse.json({ error: 'sesion not found' }, { status: 404 })
 

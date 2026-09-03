@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { sesionesEscaneo, sesionCourierBatches, sesionItems } from '../../db/schema'
 import {
@@ -21,6 +21,9 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     where: (s, { eq }) => eq(s.id, sesionId),
   })
   if (!sesion) throw new Error(`Sesión ${sesionId} no encontrada`)
+
+  // QStash may re-deliver a job whose previous run already fully succeeded.
+  if (sesion.estado === 'sincronizada') return
 
   const almacen = await db.query.almacenes.findFirst({
     where: (a, { eq }) => eq(a.id, sesion.almacenId),
@@ -65,7 +68,10 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     for (const tracking of liveDuplicates) {
       await db.update(sesionItems)
         .set({ estado: 'duplicado' })
-        .where(eq(sesionItems.trackingNumber, tracking))
+        .where(and(
+          eq(sesionItems.courierBatchId, batch.id),
+          eq(sesionItems.trackingNumber, tracking),
+        ))
     }
 
     if (toSync.length > 0) {
@@ -76,13 +82,23 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
       for (const tracking of toSync) {
         await db.update(sesionItems)
           .set({ estado: 'sincronizado' })
-          .where(eq(sesionItems.trackingNumber, tracking))
+          .where(and(
+            eq(sesionItems.courierBatchId, batch.id),
+            eq(sesionItems.trackingNumber, tracking),
+          ))
         await recordSyncedTracking(tracking, pickingId)
       }
     }
   }
 
-  await validatePicking(pickingId)
+  // On a retry the picking may already have been validated (or cancelled) by a
+  // previous run — re-validating a terminal picking would error, so skip it.
+  const [cur] = await callKw<Array<{ state: string }>>(
+    'stock.picking', 'read', [[pickingId], ['state']],
+  )
+  if (cur.state !== 'done' && cur.state !== 'cancel') {
+    await validatePicking(pickingId)
+  }
 
   const recibidoPorField = process.env.ODOO_FIELD_RECIBIDO_POR
   await callKw('stock.picking', 'message_post', [[pickingId]], {
