@@ -6,11 +6,16 @@ vi.mock('../../db/client', () => ({
     query: {
       trackingActivosCache: {
         findFirst: async ({ where }: any) => {
-          // Mock: find row by trackingNumber (ignoring the where condition object structure)
-          if (rows.length === 0) return undefined
-          // For this test, we just find the first row with matching trackingNumber
-          // The actual where condition passed is eq(trackingActivosCache.trackingNumber, trackingNumber)
-          return rows[0] ?? undefined
+          // Test-only mock: extract compared value from Drizzle eq() condition object.
+          // The where object is a SQL expression with queryChunks array containing Param objects with the value.
+          let searchValue = null
+          if (Array.isArray((where as any)?.queryChunks)) {
+            // Find the Param object in queryChunks array
+            const paramChunk = (where as any).queryChunks.find((chunk: any) => chunk?.value !== undefined && typeof chunk.value === 'string')
+            if (paramChunk) searchValue = paramChunk.value
+          }
+          if (!searchValue) return undefined
+          return rows.find((r) => r.trackingNumber === searchValue) ?? undefined
         },
       },
     },
@@ -34,5 +39,13 @@ describe('tracking activos cache', () => {
   it('recordSyncedTracking then isKnownDuplicate is true', async () => {
     await recordSyncedTracking('ABC', 501)
     expect(await isKnownDuplicate('ABC')).toBe(true)
+  })
+
+  it('isKnownDuplicate filters by trackingNumber', async () => {
+    await recordSyncedTracking('ABC', 501)
+    await recordSyncedTracking('XYZ', 502)
+    expect(await isKnownDuplicate('ABC')).toBe(true)
+    expect(await isKnownDuplicate('XYZ')).toBe(true)
+    expect(await isKnownDuplicate('DEF')).toBe(false)
   })
 })
