@@ -59,3 +59,43 @@ export async function validatePicking(pickingId: number): Promise<void> {
   await callKw('stock.picking', 'action_assign', [[pickingId]])
   await callKw('stock.picking', 'button_validate', [[pickingId]])
 }
+
+export interface PendingDelivery {
+  id: number
+  name: string
+  trackingNumbers: string[]
+}
+
+interface PickingRead {
+  id: number
+  name: string
+}
+
+export async function getPendingOutgoing(almacenPickingTypeId: number, barcoOdooId: number): Promise<PendingDelivery[]> {
+  const barcoField = process.env.ODOO_FIELD_BARCO
+  if (!barcoField) throw new Error('ODOO_FIELD_BARCO is not set')
+
+  const pickings = await callKw<PickingRead[]>('stock.picking', 'search_read', [[
+    ['picking_type_id', '=', almacenPickingTypeId],
+    [barcoField, '=', barcoOdooId],
+    ['state', 'not in', ['draft', 'done', 'cancel']],
+    ['picking_type_code', '=', 'outgoing'],
+  ]], { fields: ['name'] })
+
+  if (pickings.length === 0) return []
+
+  const lines = await callKw<Array<{ picking_id: [number, string]; lot_id: [number, string] | false }>>(
+    'stock.move.line',
+    'search_read',
+    [[['picking_id', 'in', pickings.map((p) => p.id)]]],
+    { fields: ['picking_id', 'lot_id'] },
+  )
+
+  return pickings.map((p) => ({
+    id: p.id,
+    name: p.name,
+    trackingNumbers: lines
+      .filter((l) => l.picking_id[0] === p.id && l.lot_id)
+      .map((l) => (l.lot_id as [number, string])[1]),
+  }))
+}

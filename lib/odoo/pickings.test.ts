@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./client', () => ({ callKw: vi.fn() }))
 import { callKw } from './client'
-import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking } from './pickings'
+import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking, getPendingOutgoing } from './pickings'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -78,5 +78,22 @@ describe('validatePicking', () => {
     expect(callKw).toHaveBeenNthCalledWith(1, 'stock.picking', 'action_confirm', [[501]])
     expect(callKw).toHaveBeenNthCalledWith(2, 'stock.picking', 'action_assign', [[501]])
     expect(callKw).toHaveBeenNthCalledWith(3, 'stock.picking', 'button_validate', [[501]])
+  })
+})
+
+describe('getPendingOutgoing', () => {
+  it('reads outgoing pickings for a barco+almacen with their tracking numbers', async () => {
+    process.env.ODOO_FIELD_BARCO = 'x_studio_barco'
+    vi.mocked(callKw)
+      .mockResolvedValueOnce([{ id: 700, name: 'MB92/OUT/00069' }])
+      .mockResolvedValueOnce([
+        { picking_id: [700, 'MB92/OUT/00069'], lot_id: [1, 'T1'] },
+        { picking_id: [700, 'MB92/OUT/00069'], lot_id: [2, 'T2'] },
+      ])
+
+    const result = await getPendingOutgoing(7, 33)
+
+    expect(result).toEqual([{ id: 700, name: 'MB92/OUT/00069', trackingNumbers: ['T1', 'T2'] }])
+    expect(callKw).toHaveBeenCalledTimes(2)
   })
 })
