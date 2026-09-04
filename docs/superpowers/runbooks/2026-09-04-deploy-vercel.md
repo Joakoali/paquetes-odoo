@@ -297,7 +297,7 @@ Sobre `https://webapp-paqueteria.vercel.app`:
 - [ ] **(f)** **Duración de funciones / plan Vercel.** Los workers declaran:
   - `app/api/qstash/refresh-barcos/route.ts` → `export const maxDuration = 60`
   - `app/api/qstash/sync-session/route.ts` → `export const maxDuration = 300`
-  En plan **Hobby** el máximo es **60 s**: `sync-session` se cortaría a los 60 s y las sesiones grandes (decenas de paquetes × ~1 s/llamada a Odoo) **no drenarían**. Para honrar los 300 s hace falta plan **Pro** (Fluid Compute). **Decisión pendiente: contratar Pro antes de meter tráfico real de sesiones.**
+  Con **Fluid Compute** (activado por defecto) el límite es **300 s en todos los planes, Hobby incluido** — así que `maxDuration = 300` corre en el free tier sin problema. **Decisión (2026-09-04): se usa el plan Hobby / free tier** porque esto es una prueba, no producción comercial. Ojo: el plan Hobby de Vercel es formalmente **solo para uso no comercial**; cuando la app pase a operación real de BWA/Marala hay que migrar a **Pro** (USD 20/usuario/mes) por licencia, no por límite técnico. El cron diario entra en cualquier plan.
 
 ---
 
@@ -413,7 +413,7 @@ vercel rollback
 
 ## Preguntas / decisiones abiertas
 
-1. **Plan de Vercel: ¿Hobby o Pro?** El worker `sync-session` pide `maxDuration = 300`, imposible en Hobby (tope 60 s). Sin Pro, las sesiones con muchos paquetes no terminan de sincronizar. Recomendación: **Pro** antes de tráfico real.
+1. ~~**Plan de Vercel: ¿Hobby o Pro?**~~ **Resuelto (2026-09-04): Hobby / free tier**, es una prueba. `maxDuration = 300` funciona en Hobby con Fluid Compute. Migrar a Pro cuando pase a uso comercial real (licencia, no técnica).
 2. **URL exacta de la instancia Odoo TEST** para `ODOO_BASE_URL`. Hay que confirmarla (login SaaS de Odoo → base test).
 3. **Nombre del proyecto Vercel / dominio.** `webapp-paqueteria.vercel.app` es la sugerencia; si se usa otro, ajustar `APP_BASE_URL` en consecuencia.
 4. **¿Integración Neon en Vercel o `DATABASE_URL` manual?** Si se instala la integración Neon (`vercel integration add neon`), gestiona `DATABASE_URL` sola pero podría crear/apuntar a otra rama — hay que garantizar que sea la misma donde está el schema. Si no, cargarla a mano (más control).
