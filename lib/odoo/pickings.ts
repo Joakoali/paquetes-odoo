@@ -40,15 +40,16 @@ export async function addCourierMoveWithLines(
   courierProductId: number,
   trackingNumbers: string[],
 ): Promise<number> {
-  // TODO(task-22): confirmar contra Odoo 19 real. `qty_done` desapareció en
-  // Odoo 17 (ahora `quantity` en stock.move.line) y el flag `picked` puede
-  // tener que ir en la línea en vez de en el movimiento.
+  // Odoo 19: `stock.move` has no `name` field (removed); use `description_picking`
+  // for the human-readable trace. Required fields (locations, uom, company, date)
+  // are filled by Odoo from `picking_id`. `picked` lives on both stock.move and
+  // stock.move.line here — set it on both so button_validate has nothing to ask.
   const res = await odooCall<number | number[]>('stock.move', 'create', {
     vals_list: [{
       picking_id: pickingId,
       product_id: courierProductId,
       product_uom_qty: trackingNumbers.length,
-      name: 'Recepción webapp',
+      description_picking: 'Recepción webapp',
       picked: true,
     }],
   })
@@ -61,6 +62,7 @@ export async function addCourierMoveWithLines(
       product_id: courierProductId,
       lot_name,
       quantity: 1,
+      picked: true,
     })),
   })
 

@@ -64,14 +64,14 @@ describe('addCourierMoveWithLines', () => {
         picking_id: 501,
         product_id: 15,
         product_uom_qty: 2,
-        name: 'Recepción webapp',
+        description_picking: 'Recepción webapp',
         picked: true,
       }],
     })
     expect(odooCall).toHaveBeenNthCalledWith(2, 'stock.move.line', 'create', {
       vals_list: [
-        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1 },
-        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1 },
+        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true },
+        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true },
       ],
     })
   })
