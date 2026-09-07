@@ -6,7 +6,7 @@ vi.mock('../odoo/pickings', () => ({
   addCourierMoveWithLines: vi.fn(),
   validatePicking: vi.fn(),
 }))
-vi.mock('../odoo/client', () => ({ callKw: vi.fn() }))
+vi.mock('../odoo/client', () => ({ odooCall: vi.fn() }))
 vi.mock('../cache/trackingActivos', () => ({ recordSyncedTrackings: vi.fn() }))
 
 const dbState = {
@@ -80,7 +80,7 @@ vi.mock('../../db/client', () => ({
 
 import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking } from '../odoo/pickings'
 import { recordSyncedTrackings } from '../cache/trackingActivos'
-import { callKw } from '../odoo/client'
+import { odooCall } from '../odoo/client'
 import { syncRecepcionSession } from './recepcion'
 
 beforeEach(() => {
@@ -103,7 +103,7 @@ beforeEach(() => {
   vi.mocked(addCourierMoveWithLines).mockResolvedValue(900)
   vi.mocked(validatePicking).mockResolvedValue(undefined)
   // stock.picking.read('state') returns a non-terminal state by default.
-  vi.mocked(callKw).mockResolvedValue([{ state: 'assigned' }] as never)
+  vi.mocked(odooCall).mockResolvedValue([{ state: 'assigned' }] as never)
 })
 
 describe('syncRecepcionSession', () => {
@@ -192,7 +192,7 @@ describe('syncRecepcionSession', () => {
   })
 
   it('throws a readable error when the picking no longer exists in Odoo', async () => {
-    vi.mocked(callKw).mockResolvedValue([] as never)
+    vi.mocked(odooCall).mockResolvedValue([] as never)
     await expect(syncRecepcionSession('s1')).rejects.toThrow(/no existe en Odoo/)
   })
 })

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../odoo/client', () => ({ callKw: vi.fn() }))
+vi.mock('../odoo/client', () => ({ odooCall: vi.fn() }))
 const rows: Array<{ odooId: number; nombre: string }> = []
 const upsert = { set: null as any }
 vi.mock('../../db/client', () => ({
@@ -48,24 +48,24 @@ vi.mock('../../db/client', () => ({
   },
 }))
 
-import { callKw } from '../odoo/client'
+import { odooCall } from '../odoo/client'
 import { refreshBarcosCache, searchBarcos } from './barcos'
 
 beforeEach(() => { rows.length = 0; upsert.set = null })
 
 describe('barcos cache', () => {
   it('refreshBarcosCache upserts from project.project', async () => {
-    vi.mocked(callKw).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
+    vi.mocked(odooCall).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
     await refreshBarcosCache()
-    expect(callKw).toHaveBeenCalledWith('project.project', 'search_read', [[]], { fields: ['name'] })
+    expect(odooCall).toHaveBeenCalledWith('project.project', 'search_read', { domain: [], fields: ['name'] })
     expect(rows).toEqual([{ odooId: 1, nombre: 'MOONSHADOW' }])
   })
 
   it('refreshBarcosCache updates the name of a renamed barco', async () => {
-    vi.mocked(callKw).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
+    vi.mocked(odooCall).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
     await refreshBarcosCache()
 
-    vi.mocked(callKw).mockResolvedValue([{ id: 1, name: 'MOONSHADOW II' }])
+    vi.mocked(odooCall).mockResolvedValue([{ id: 1, name: 'MOONSHADOW II' }])
     await refreshBarcosCache()
 
     expect(rows).toEqual([{ odooId: 1, nombre: 'MOONSHADOW II' }])

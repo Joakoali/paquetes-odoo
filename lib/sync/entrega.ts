@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { sesionesEscaneo } from '../../db/schema'
-import { callKw } from '../odoo/client'
+import { odooCall } from '../odoo/client'
 import { validatePicking } from '../odoo/pickings'
 
 /**
@@ -22,18 +22,19 @@ export async function syncEntregaSession(sesionId: string): Promise<void> {
   }
 
   for (const pickingId of sesion.odooPickingIds) {
-    const [current] = await callKw<Array<{ id: number; state: string }>>(
-      'stock.picking', 'read', [[pickingId]], { fields: ['state'] },
+    const [current] = await odooCall<Array<{ id: number; state: string }>>(
+      'stock.picking', 'read', { ids: [pickingId], fields: ['state'] },
     )
     if (!current) throw new Error(`picking ${pickingId} no existe en Odoo`)
     if (current.state === 'done') continue
 
-    await callKw('stock.picking', 'write', [[pickingId], {
-      signature: sesion.firmaData,
-      is_signed: true,
-    }])
+    await odooCall('stock.picking', 'write', {
+      ids: [pickingId],
+      vals: { signature: sesion.firmaData, is_signed: true },
+    })
     await validatePicking(pickingId)
-    await callKw('stock.picking', 'message_post', [[pickingId]], {
+    await odooCall('stock.picking', 'message_post', {
+      ids: [pickingId],
       body: `Entrega confirmada vía Webapp Paquetería por operario ${sesion.operarioId}`,
     })
   }

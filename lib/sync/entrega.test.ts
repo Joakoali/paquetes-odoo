@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../odoo/client', () => ({ callKw: vi.fn() }))
+vi.mock('../odoo/client', () => ({ odooCall: vi.fn() }))
 vi.mock('../odoo/pickings', () => ({ validatePicking: vi.fn() }))
 
 const dbState = {
@@ -18,7 +18,7 @@ vi.mock('../../db/client', () => ({
   },
 }))
 
-import { callKw } from '../odoo/client'
+import { odooCall } from '../odoo/client'
 import { validatePicking } from '../odoo/pickings'
 import { syncEntregaSession } from './entrega'
 
@@ -30,24 +30,25 @@ beforeEach(() => {
 
 describe('syncEntregaSession', () => {
   it('writes signature and validates each picking not already done', async () => {
-    vi.mocked(callKw).mockImplementation(async (model: string, method: string) => {
+    vi.mocked(odooCall).mockImplementation(async (model: string, method: string) => {
       if (model === 'stock.picking' && method === 'read') return [{ id: 700, state: 'assigned' }]
       return undefined
     })
 
     await syncEntregaSession('s1')
 
-    expect(callKw).toHaveBeenCalledWith('stock.picking', 'write', [[700], {
-      signature: 'data:image/png;base64,AAA', is_signed: true,
-    }])
+    expect(odooCall).toHaveBeenCalledWith('stock.picking', 'write', {
+      ids: [700],
+      vals: { signature: 'data:image/png;base64,AAA', is_signed: true },
+    })
     expect(validatePicking).toHaveBeenCalledWith(700)
     expect(dbState.sesion.estado).toBe('sincronizada')
   })
 
   it('skips a picking already in state done', async () => {
-    vi.mocked(callKw).mockImplementation(async (model: string, method: string, args: any[]) => {
+    vi.mocked(odooCall).mockImplementation(async (model: string, method: string, params: any) => {
       if (model === 'stock.picking' && method === 'read') {
-        const id = args[0][0]
+        const id = params.ids[0]
         return [{ id, state: id === 700 ? 'done' : 'assigned' }]
       }
       return undefined
@@ -60,7 +61,7 @@ describe('syncEntregaSession', () => {
   })
 
   it('throws a readable error when the picking no longer exists in Odoo', async () => {
-    vi.mocked(callKw).mockImplementation(async (model: string, method: string) => {
+    vi.mocked(odooCall).mockImplementation(async (model: string, method: string) => {
       if (model === 'stock.picking' && method === 'read') return []
       return undefined
     })

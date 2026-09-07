@@ -22,17 +22,28 @@ async function throttle(): Promise<void> {
   if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
 }
 
-export async function callKw<T>(
+/**
+ * Odoo 19 JSON-2 API: `POST /json/2/<model>/<method>`, `Authorization: Bearer`.
+ * The body is a *flat* JSON object whose keys are the target method's own
+ * parameters (`domain`, `fields`, `vals_list`, `vals`, …) plus optionally
+ * `ids` (the recordset the method runs on) and `context`. The response is the
+ * raw result — no `{ "result": … }` envelope. Errors come back with a non-2xx
+ * status and an `{ name, message, arguments, … }` body.
+ *
+ * NOT the classic JSON-RPC `{ args, kwargs }` shape — that returns 422
+ * "missing a required argument" against this instance.
+ */
+export async function odooCall<T>(
   model: string,
   method: string,
-  args: unknown[],
-  kwargs: Record<string, unknown> = {},
+  params: Record<string, unknown> = {},
 ): Promise<T> {
-  const baseUrl = process.env.ODOO_BASE_URL
+  const rawBase = process.env.ODOO_BASE_URL
   const apiKey = process.env.ODOO_API_KEY
-  if (!baseUrl || !apiKey) {
+  if (!rawBase || !apiKey) {
     throw new Error('ODOO_BASE_URL and ODOO_API_KEY must be set')
   }
+  const baseUrl = rawBase.replace(/\/+$/, '')
 
   await throttle()
 
@@ -42,12 +53,18 @@ export async function callKw<T>(
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ args, kwargs }),
+    body: JSON.stringify(params),
   })
 
-  const body = await response.json()
-  if (!response.ok || body.error) {
-    throw new OdooError(body.error ?? body)
+  const text = await response.text()
+  let body: unknown = null
+  if (text) {
+    try {
+      body = JSON.parse(text)
+    } catch {
+      throw new OdooError({ status: response.status, body: text })
+    }
   }
-  return body.result as T
+  if (!response.ok) throw new OdooError(body ?? { status: response.status })
+  return body as T
 }

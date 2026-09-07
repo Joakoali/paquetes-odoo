@@ -7,7 +7,7 @@ import {
   addCourierMoveWithLines,
   validatePicking,
 } from '../odoo/pickings'
-import { callKw } from '../odoo/client'
+import { odooCall } from '../odoo/client'
 import { recordSyncedTrackings } from '../cache/trackingActivos'
 
 const TODOS_DUPLICADOS =
@@ -116,8 +116,8 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   if (anyMove) {
     // On a retry the picking may already have been validated (or cancelled) by
     // a previous run — re-validating a terminal picking would error, so skip it.
-    const [cur] = await callKw<Array<{ state: string }>>(
-      'stock.picking', 'read', [[pickingId], ['state']],
+    const [cur] = await odooCall<Array<{ state: string }>>(
+      'stock.picking', 'read', { ids: [pickingId], fields: ['state'] },
     )
     if (!cur) throw new Error(`picking ${pickingId} no existe en Odoo`)
     if (cur.state !== 'done' && cur.state !== 'cancel') {
@@ -126,11 +126,15 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   }
 
   const recibidoPorField = process.env.ODOO_FIELD_RECIBIDO_POR
-  await callKw('stock.picking', 'message_post', [[pickingId]], {
+  await odooCall('stock.picking', 'message_post', {
+    ids: [pickingId],
     body: `Registrado vía Webapp Paquetería por operario ${sesion.operarioId}`,
   })
   if (recibidoPorField) {
-    await callKw('stock.picking', 'write', [[pickingId], { [recibidoPorField]: sesion.operarioId }])
+    await odooCall('stock.picking', 'write', {
+      ids: [pickingId],
+      vals: { [recibidoPorField]: sesion.operarioId },
+    })
   }
 
   await db.update(sesionesEscaneo)

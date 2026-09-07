@@ -1,5 +1,5 @@
 import { ilike, sql } from 'drizzle-orm'
-import { callKw } from '../odoo/client'
+import { odooCall } from '../odoo/client'
 import { db } from '../../db/client'
 import { barcosCache } from '../../db/schema'
 
@@ -9,7 +9,10 @@ interface ProjectRead {
 }
 
 export async function refreshBarcosCache(): Promise<void> {
-  const projects = await callKw<ProjectRead[]>('project.project', 'search_read', [[]], { fields: ['name'] })
+  const projects = await odooCall<ProjectRead[]>('project.project', 'search_read', {
+    domain: [],
+    fields: ['name'],
+  })
   if (projects.length === 0) return
 
   await db.insert(barcosCache)
