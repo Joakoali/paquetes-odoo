@@ -39,17 +39,23 @@ export async function addCourierMoveWithLines(
   pickingId: number,
   courierProductId: number,
   trackingNumbers: string[],
+  locationId: number,
+  locationDestId: number,
 ): Promise<number> {
   // Odoo 19: `stock.move` has no `name` field (removed); use `description_picking`
-  // for the human-readable trace. Required fields (locations, uom, company, date)
-  // are filled by Odoo from `picking_id`. `picked` lives on both stock.move and
-  // stock.move.line here — set it on both so button_validate has nothing to ask.
+  // for the human-readable trace. `location_id`/`location_dest_id` are NOT derived
+  // from `picking_id` by a raw ORM `create()` (that only happens via UI onchange) —
+  // pass the picking's own locations explicitly or Odoo raises a NotNullViolation.
+  // `picked` lives on both stock.move and stock.move.line here — set it on both so
+  // button_validate has nothing to ask.
   const res = await odooCall<number | number[]>('stock.move', 'create', {
     vals_list: [{
       picking_id: pickingId,
       product_id: courierProductId,
       product_uom_qty: trackingNumbers.length,
       description_picking: 'Recepción webapp',
+      location_id: locationId,
+      location_dest_id: locationDestId,
       picked: true,
     }],
   })

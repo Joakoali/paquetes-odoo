@@ -102,8 +102,11 @@ beforeEach(() => {
   vi.mocked(createIncomingPicking).mockResolvedValue(501)
   vi.mocked(addCourierMoveWithLines).mockResolvedValue(900)
   vi.mocked(validatePicking).mockResolvedValue(undefined)
-  // stock.picking.read('state') returns a non-terminal state by default.
-  vi.mocked(odooCall).mockResolvedValue([{ state: 'assigned' }] as never)
+  // Covers both stock.picking.read('location_id'/'location_dest_id') and
+  // ('state'); the mock doesn't care which fields were requested.
+  vi.mocked(odooCall).mockResolvedValue(
+    [{ state: 'assigned', location_id: [1, 'Vendors'], location_dest_id: [5, 'MB92/Stock'] }] as never,
+  )
 })
 
 describe('syncRecepcionSession', () => {
@@ -111,8 +114,8 @@ describe('syncRecepcionSession', () => {
     await syncRecepcionSession('s1')
 
     expect(createIncomingPicking).toHaveBeenCalledWith(7, 33)
-    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 100, ['T1'])
-    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 100, ['T1'], 1, 5)
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'], 1, 5)
     expect(validatePicking).toHaveBeenCalledWith(501)
     expect(dbState.sesion.estado).toBe('sincronizada')
   })
@@ -144,7 +147,7 @@ describe('syncRecepcionSession', () => {
     // b1's only tracking (T1) is a live duplicate -> no move for its product (100)
     expect(addCourierMoveWithLines).not.toHaveBeenCalledWith(501, 100, expect.anything())
     // b2 is untouched by the duplicate and still syncs
-    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'], 1, 5)
     // the offending item is marked locally, session still completes
     expect(dbState.items.find((i) => i.trackingNumber === 'T1')!.estado).toBe('duplicado')
     expect(dbState.sesion.estado).toBe('sincronizada')
@@ -157,7 +160,7 @@ describe('syncRecepcionSession', () => {
 
     expect(checkDuplicateTrackingNumbers).toHaveBeenCalledWith(['T2'])
     expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
-    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'], 1, 5)
   })
 
   it('skips a batch that already has an odoo_move_id on retry', async () => {
@@ -165,7 +168,7 @@ describe('syncRecepcionSession', () => {
     dbState.batches[0].odooMoveId = 900
     await syncRecepcionSession('s1')
     expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
-    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'])
+    expect(addCourierMoveWithLines).toHaveBeenCalledWith(501, 101, ['T2'], 1, 5)
   })
 
   it('does not validate a move-less picking when every tracking is a duplicate', async () => {

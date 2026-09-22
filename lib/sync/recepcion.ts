@@ -67,6 +67,21 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   // A previous attempt may already have created moves for some batches.
   let anyMove = batches.some((b) => b.odooMoveId !== null && b.odooMoveId !== undefined)
 
+  // stock.move's location_id/location_dest_id are NOT derived from picking_id by
+  // a raw ORM create() — only the UI's onchange fills them. Read the picking's own
+  // locations once and pass them explicitly to every move created below.
+  let locationId = 0
+  let locationDestId = 0
+  if (pendingBatches.length > 0) {
+    const [pickingLocations] = await odooCall<Array<{
+      location_id: [number, string]
+      location_dest_id: [number, string]
+    }>>('stock.picking', 'read', { ids: [pickingId], fields: ['location_id', 'location_dest_id'] })
+    if (!pickingLocations) throw new Error(`picking ${pickingId} no existe en Odoo`)
+    locationId = pickingLocations.location_id[0]
+    locationDestId = pickingLocations.location_dest_id[0]
+  }
+
   for (const batch of pendingBatches) {
     const courier = await db.query.couriers.findFirst({
       where: (c, { eq: e }) => e(c.id, batch.courierId),
@@ -89,7 +104,9 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     }
 
     if (toSync.length > 0) {
-      const moveId = await addCourierMoveWithLines(pickingId, courier.odooProductId, toSync)
+      const moveId = await addCourierMoveWithLines(
+        pickingId, courier.odooProductId, toSync, locationId, locationDestId,
+      )
       await db.update(sesionCourierBatches)
         .set({ odooMoveId: moveId })
         .where(eq(sesionCourierBatches.id, batch.id))

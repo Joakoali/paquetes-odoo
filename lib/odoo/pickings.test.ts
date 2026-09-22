@@ -56,7 +56,7 @@ describe('addCourierMoveWithLines', () => {
       .mockResolvedValueOnce([900]) // move create
       .mockResolvedValueOnce([1, 2]) // move.line create (batch)
 
-    const moveId = await addCourierMoveWithLines(501, 15, ['T1', 'T2'])
+    const moveId = await addCourierMoveWithLines(501, 15, ['T1', 'T2'], 1, 5)
 
     expect(moveId).toBe(900)
     expect(odooCall).toHaveBeenNthCalledWith(1, 'stock.move', 'create', {
@@ -65,6 +65,8 @@ describe('addCourierMoveWithLines', () => {
         product_id: 15,
         product_uom_qty: 2,
         description_picking: 'Recepción webapp',
+        location_id: 1,
+        location_dest_id: 5,
         picked: true,
       }],
     })
