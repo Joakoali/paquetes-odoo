@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
   barcosCache, couriers, sesionCourierBatches, sesionItems, sesionesEscaneo,
@@ -363,17 +363,20 @@ export interface RecepcionAbierta {
   id: string
   barcoOdooId: number
   barcoNombre: string
-  /** Every package scanned into it, the duplicados too: they are in it, flagged. */
+  /** The packages that will be sent: the valid ones, not the duplicados. */
   paquetes: number
-  /** The couriers of those packages, the ones with the most first. */
+  /** The duplicados: packages Odoo already has, which are in the recepción flagged and are not sent. */
+  duplicados: number
+  /** The couriers of the packages that will be sent, the ones with the most first. A courier with only duplicados is not in it. */
   porCourier: Array<{ nombre: string; cantidad: number }>
   abiertaDesde: Date
 }
 
 /**
- * The open recepciones of the almacén that have at least one package, oldest first: an empty one
- * is just an operario who opened a barco and has not scanned yet. Whoever has the almacén sees
- * them all: they belong to the almacén and the barco, not to who opened them.
+ * The open recepciones of the almacén that have at least one package of any kind, oldest first: an
+ * empty one is just an operario who opened a barco and has not scanned yet, but one with only
+ * duplicados is listed (with `paquetes` 0), since somebody has to look at it. Whoever has the
+ * almacén sees them all: they belong to the almacén and the barco, not to who opened them.
  */
 export async function listarRecepcionesAbiertas(almacenId: number): Promise<RecepcionAbierta[]> {
   const filas = await db.select({
@@ -382,7 +385,8 @@ export async function listarRecepcionesAbiertas(almacenId: number): Promise<Rece
     barcoNombre: barcosCache.nombre,
     abiertaDesde: sesionesEscaneo.createdAt,
     courierNombre: couriers.nombre,
-    cantidad: count(),
+    validos: sql<number>`count(*) filter (where ${sesionItems.estado} = 'ok')`.mapWith(Number),
+    duplicados: sql<number>`count(*) filter (where ${sesionItems.estado} = 'duplicado')`.mapWith(Number),
   })
     .from(sesionesEscaneo)
     .innerJoin(sesionCourierBatches, eq(sesionCourierBatches.sesionId, sesionesEscaneo.id))
@@ -407,13 +411,15 @@ export async function listarRecepcionesAbiertas(almacenId: number): Promise<Rece
         barcoOdooId: fila.barcoOdooId,
         barcoNombre: nombreDeBarco(fila.barcoNombre, fila.barcoOdooId),
         paquetes: 0,
+        duplicados: 0,
         porCourier: [],
         abiertaDesde: fila.abiertaDesde,
       }
       recepciones.set(fila.id, recepcion)
     }
-    recepcion.paquetes += fila.cantidad
-    recepcion.porCourier.push({ nombre: fila.courierNombre, cantidad: fila.cantidad })
+    recepcion.paquetes += fila.validos
+    recepcion.duplicados += fila.duplicados
+    if (fila.validos > 0) recepcion.porCourier.push({ nombre: fila.courierNombre, cantidad: fila.validos })
   }
   for (const recepcion of recepciones.values()) {
     recepcion.porCourier.sort((a, b) => b.cantidad - a.cantidad || a.nombre.localeCompare(b.nombre, 'es'))
@@ -424,7 +430,7 @@ export async function listarRecepcionesAbiertas(almacenId: number): Promise<Rece
 export interface RecepcionEnviada {
   id: string
   barcoNombre: string
-  /** Every package of the recepción, the duplicados too. */
+  /** The packages that went to Odoo: every one of the recepción except the duplicados. */
   paquetes: number
   /** `enviando`: waiting for the worker. `ok`: it is in Odoo. `problema`: it failed, or it went in with a note. */
   estado: 'enviando' | 'ok' | 'problema'
@@ -454,7 +460,8 @@ export async function listarEnviadasHoy(almacenId: number, ahora: Date = new Dat
     ultimoError: sesionesEscaneo.ultimoError,
     odooPickingRef: sesionesEscaneo.odooPickingRef,
     confirmedAt: sesionesEscaneo.confirmedAt,
-    paquetes: count(sesionItems.id),
+    // Whatever is not a duplicado went (or goes) to Odoo, in whatever state its sync has left it.
+    paquetes: sql<number>`count(${sesionItems.id}) filter (where ${sesionItems.estado} <> 'duplicado')`.mapWith(Number),
   })
     .from(sesionesEscaneo)
     .leftJoin(sesionCourierBatches, eq(sesionCourierBatches.sesionId, sesionesEscaneo.id))

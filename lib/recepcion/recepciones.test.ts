@@ -933,6 +933,7 @@ describe('listarRecepcionesAbiertas', () => {
       barcoOdooId: 673,
       barcoNombre: 'MAYANQUEEN',
       paquetes: 3,
+      duplicados: 0,
       porCourier: [{ nombre: 'DHL', cantidad: 2 }, { nombre: 'GLS', cantidad: 1 }],
       abiertaDesde: new Date('2026-10-22T07:12:00Z'),
     }])
@@ -975,16 +976,41 @@ describe('listarRecepcionesAbiertas', () => {
     expect(nombres).toHaveLength(2)
   })
 
-  it('counts the duplicados as packages of the recepción: they are in it, flagged', async () => {
-    const sesionId = await recepcionCon(673, ['A1'])
+  it('counts only the packages that will be sent, and the duplicados apart', async () => {
+    const sesionId = await recepcionCon(673, ['A1', 'A2'])
     await escanearDuplicado(sesionId, 'YA-ESTABA')
+
+    const [recepcion] = await listarRecepcionesAbiertas(mb92.id)
+
+    expect(recepcion).toMatchObject({ id: sesionId, paquetes: 2, duplicados: 1 })
+    expect(recepcion.porCourier).toEqual([{ nombre: 'DHL', cantidad: 2 }]) // the duplicado under DHL is not one of its 2
+  })
+
+  it('leaves out of porCourier a courier whose packages are all duplicados', async () => {
+    const sesionId = await recepcionCon(673, ['A1'])
+    await escanearDuplicado(sesionId, 'YA-ESTABA') // scanned under DHL: this helper's courier
+    await db.insert(trackingActivosCache).values({ trackingNumber: 'OTRO-YA-ESTABA', odooPickingId: 9, odooPickingRef: 'MB92/IN/00198' })
+    await escanear(sesionId, 'OTRO-YA-ESTABA', { courier: gls })
+
+    const [recepcion] = await listarRecepcionesAbiertas(mb92.id)
+
+    expect(recepcion).toMatchObject({ paquetes: 1, duplicados: 2 })
+    expect(recepcion.porCourier).toEqual([{ nombre: 'DHL', cantidad: 1 }]) // no "GLS 0"
+  })
+
+  it('still lists a recepción that has only duplicados: nothing to send, one duplicado', async () => {
     const soloDuplicados = await abrir(674)
-    await escanearDuplicado(soloDuplicados, 'OTRO-YA-ESTABA')
+    await escanearDuplicado(soloDuplicados, 'YA-ESTABA')
 
-    const lista = await listarRecepcionesAbiertas(mb92.id)
-
-    expect(lista.map((r) => [r.barcoOdooId, r.paquetes])).toEqual(expect.arrayContaining([[673, 2], [674, 1]]))
-    expect(lista).toHaveLength(2) // a recepción with only duplicados is not empty
+    expect(await listarRecepcionesAbiertas(mb92.id)).toEqual([{
+      id: soloDuplicados,
+      barcoOdooId: 674,
+      barcoNombre: 'MAYANQUEENIV',
+      paquetes: 0,
+      duplicados: 1,
+      porCourier: [],
+      abiertaDesde: expect.any(Date),
+    }])
   })
 
   it('lists only the open recepciones of the almacén asked for', async () => {
@@ -1056,6 +1082,22 @@ describe('listarEnviadasHoy', () => {
       { id: conError.id, barcoNombre: 'Barco #675', paquetes: 1, estado: 'problema', odooPickingRef: null, enviadaAt: new Date('2026-10-22T09:00:00Z') },
       { id: enviando.id, barcoNombre: 'Barco #676', paquetes: 1, estado: 'enviando', odooPickingRef: null, enviadaAt: new Date('2026-10-22T09:55:00Z') },
     ])
+  })
+
+  it('counts the packages that went to Odoo: the duplicados of a recepción are left out', async () => {
+    const sesion = await enviada(673, '2026-10-22T08:00:00Z', 'sincronizada', { odooPickingRef: 'MB92/IN/00231', paquetes: 3 })
+    await db.update(sesionItems).set({ estado: 'sincronizado' }).where(eq(sesionItems.trackingNumber, '673-1'))
+    await db.update(sesionItems).set({ estado: 'sincronizado' }).where(eq(sesionItems.trackingNumber, '673-2'))
+    await db.update(sesionItems).set({ estado: 'duplicado', duplicadoRef: 'MB92/IN/00198' }).where(eq(sesionItems.trackingNumber, '673-3'))
+
+    expect(await listarEnviadasHoy(mb92.id, AHORA)).toMatchObject([{ id: sesion.id, paquetes: 2, estado: 'ok' }])
+  })
+
+  it('counts the packages of a recepción still waiting for its sync, that is, all of them but the duplicados', async () => {
+    const sesion = await enviada(673, '2026-10-22T09:55:00Z', 'confirmada_pendiente_sync', { paquetes: 3 })
+    await db.update(sesionItems).set({ estado: 'duplicado', duplicadoRef: 'MB92/IN/00198' }).where(eq(sesionItems.trackingNumber, '673-2'))
+
+    expect(await listarEnviadasHoy(mb92.id, AHORA)).toMatchObject([{ id: sesion.id, paquetes: 2, estado: 'enviando' }])
   })
 
   it('counts the whole day in Madrid time, not in UTC: 23:30 UTC of the day before is already today', async () => {
