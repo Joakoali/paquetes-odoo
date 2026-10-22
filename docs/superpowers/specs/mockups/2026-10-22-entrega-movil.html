@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boceto: entrega en el móvil</title>
+<style>
+:root { --text-primary:#1d1d1f; --text-secondary:#86868b; --bg-tertiary:#e5e5e7; }
+body { margin:0; padding:2rem; background:#f5f5f7; color:#1d1d1f; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; line-height:1.5; }
+h2 { font-size:1.5rem; margin:0 0 .5rem; }
+.subtitle { color:#86868b; margin:0 0 1.5rem; }
+.split { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+@media (max-width:700px) { .split { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<style>
+  .phones { display:flex; flex-wrap:wrap; gap:28px; justify-content:center; align-items:flex-start; }
+  .ph-wrap { width:270px; }
+  .ph { width:270px; aspect-ratio: 9 / 19; background:#fff; color:#1d1d1f; border:9px solid #2b2b2e; border-radius:34px;
+        overflow:hidden; display:flex; flex-direction:column; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size:12.5px; line-height:1.35; box-shadow:0 8px 28px rgba(0,0,0,.18); position:relative; }
+  .ph * { box-sizing:border-box; }
+  .ph-status { height:22px; display:flex; align-items:center; justify-content:space-between; padding:0 16px; font-size:10.5px; font-weight:700; }
+  .ph-head { display:flex; align-items:center; gap:8px; padding:6px 14px 8px; border-bottom:1px solid #e5e5ea; }
+  .ph-title { font-weight:800; font-size:17px; }
+  .ph-back { color:#0a5bd3; font-weight:600; font-size:13px; }
+  .ph-wh { margin-left:auto; padding:3px 9px; border:1.5px solid #c7c7cc; border-radius:999px; font-weight:700; font-size:11px; }
+  .ph-body { flex:1; padding:10px 12px; display:flex; flex-direction:column; gap:8px; min-height:0; overflow:hidden; }
+  .ph-label { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#8e8e93; }
+  .ph-search { border:2px solid #1d1d1f; border-radius:11px; padding:9px 10px; font-size:13.5px; color:#8e8e93; }
+  .ph-list { border:1px solid #e5e5ea; border-radius:12px; overflow:hidden; }
+  .ph-row { display:flex; align-items:center; gap:8px; padding:9px 11px; border-top:1px solid #e5e5ea; }
+  .ph-row:first-child { border-top:none; }
+  .ph-row .name { font-weight:700; font-size:14px; }
+  .ph-row .meta { color:#6e6e73; font-size:11px; }
+  .ph-row .count { margin-left:auto; font-weight:700; white-space:nowrap; }
+  .ph-row .chev { color:#c7c7cc; font-size:17px; font-weight:700; }
+  .ph-sent { font-size:11px; color:#6e6e73; }
+  .ok { color:#0a7d32; font-weight:700; }
+  .ph-tabs { display:flex; border-top:1px solid #e5e5ea; background:#fafafa; }
+  .ph-tabs span { flex:1; text-align:center; padding:9px 0 12px; font-size:11px; font-weight:600; color:#8e8e93; }
+  .ph-tabs span.on { color:#1d1d1f; font-weight:800; }
+  .ph-pk { display:flex; align-items:center; gap:8px; padding:7px 10px; border-top:1px solid #e5e5ea; font-family: ui-monospace, Consolas, monospace; font-size:11px; }
+  .ph-pk:first-child { border-top:none; }
+  .ph-pk .box { width:18px; height:18px; border-radius:5px; background:#0a7d32; color:#fff; font-size:11px; font-weight:800;
+                display:flex; align-items:center; justify-content:center; font-family: system-ui, sans-serif; flex-shrink:0; }
+  .ph-pk .cour { font-family: system-ui, sans-serif; font-size:10px; font-weight:700; background:#f2f2f7; border-radius:6px; padding:1px 6px; margin-left:auto; }
+  .ph-pk.off { color:#aeaeb2; }
+  .ph-pk.off .box { background:#fff; border:1.5px solid #c7c7cc; color:transparent; }
+  .ph-pk.off .stay { font-family: system-ui, sans-serif; font-size:10px; font-weight:600; color:#b25f00; margin-left:auto; }
+  .ph-more { padding:7px 10px; border-top:1px solid #e5e5ea; color:#8e8e93; font-size:11px; }
+  .ph-primary { background:#0a7d32; color:#fff; border-radius:12px; padding:12px; text-align:center; font-weight:700; font-size:14px; margin-top:auto; }
+  .ph-summary { background:#f2f2f7; border-radius:11px; padding:9px 11px; font-weight:600; }
+  .ph-summary b { font-size:14px; }
+  .ph-input { border:2px solid #1d1d1f; border-radius:10px; padding:9px 10px; font-size:14px; font-weight:600; }
+  .ph-sign { flex:1; min-height:120px; border:2px dashed #c7c7cc; border-radius:12px; position:relative; background:#fcfcfd; }
+  .ph-sign svg { position:absolute; inset:0; width:100%; height:100%; }
+  .ph-sign .line { position:absolute; left:12px; right:12px; bottom:22px; border-top:1px solid #d1d1d6; }
+  .ph-sign .clear { position:absolute; right:10px; top:8px; color:#0a5bd3; font-weight:600; font-size:12px; }
+  .ph-sign .hint { position:absolute; left:12px; bottom:6px; color:#aeaeb2; font-size:10px; }
+  .cap { margin-top:10px; color:var(--text-secondary); font-size:.85rem; text-align:center; }
+  .step { display:inline-block; background:var(--bg-tertiary); color:var(--text-primary); border-radius:999px; padding:1px 9px; font-weight:700; margin-right:4px; }
+</style>
+
+<h2>Entrega en el móvil — propuesta</h2>
+<p class="subtitle">La recepción sigue en la tablet del almacén. La entrega se hace con el móvil del operario, que tiene datos en el barco. Nombres y códigos de ejemplo.</p>
+
+<div class="phones">
+  <div class="ph-wrap">
+    <div class="ph">
+      <div class="ph-status"><span>10:42</span><span>4G ▮▮▮</span></div>
+      <div class="ph-head"><span class="ph-title">Entrega</span><span class="ph-wh">MB92 ▾</span></div>
+      <div class="ph-body">
+        <div class="ph-search">🔍&nbsp; Buscar barco…</div>
+        <div class="ph-label">Para entregar en MB92 · 4 barcos</div>
+        <div class="ph-list">
+          <div class="ph-row"><div><div class="name">MAYANQUEEN</div><div class="meta">desde el 14/10</div></div><span class="count">12</span><span class="chev">›</span></div>
+          <div class="ph-row"><div><div class="name">ARCTIC</div><div class="meta">desde el 09/10</div></div><span class="count">7</span><span class="chev">›</span></div>
+          <div class="ph-row"><div><div class="name">STORMBORN</div><div class="meta">desde el 20/10</div></div><span class="count">5</span><span class="chev">›</span></div>
+          <div class="ph-row"><div><div class="name">GAJA</div><div class="meta">desde el 21/10</div></div><span class="count">1</span><span class="chev">›</span></div>
+        </div>
+        <div class="ph-label" style="margin-top:4px">Entregadas hoy</div>
+        <div class="ph-sent"><span class="ok">✓</span> H3 · 4 paquetes · recibió Tom</div>
+      </div>
+      <div class="ph-tabs"><span>Recepción</span><span class="on">Entrega</span><span>Pendientes</span></div>
+    </div>
+    <p class="cap"><span class="step">1</span>Elegir el barco</p>
+  </div>
+
+  <div class="ph-wrap">
+    <div class="ph">
+      <div class="ph-status"><span>10:43</span><span>4G ▮▮▮</span></div>
+      <div class="ph-head"><span class="ph-back">‹</span><span class="ph-title">MAYANQUEEN</span></div>
+      <div class="ph-body">
+        <div class="ph-label">Se entregan 11 de 12</div>
+        <div class="ph-list">
+          <div class="ph-pk"><span class="box">✓</span>1Z84X0E06811549362<span class="cour">UPS</span></div>
+          <div class="ph-pk"><span class="box">✓</span>JJD000390007840583<span class="cour">DHL</span></div>
+          <div class="ph-pk"><span class="box">✓</span>JJD000390007840588<span class="cour">DHL</span></div>
+          <div class="ph-pk off"><span class="box">✓</span>PQ4B6P04123456<span class="stay">en depósito</span></div>
+          <div class="ph-pk"><span class="box">✓</span>52083145712<span class="cour">GLS</span></div>
+          <div class="ph-pk"><span class="box">✓</span>XW301245876JF<span class="cour">CTT</span></div>
+          <div class="ph-pk"><span class="box">✓</span>1Z84X0E06811550011<span class="cour">UPS</span></div>
+          <div class="ph-more">+ 5 paquetes más</div>
+        </div>
+        <div class="ph-primary">Siguiente: firma · 11 paquetes</div>
+      </div>
+    </div>
+    <p class="cap"><span class="step">2</span>Revisar paquetes (todo marcado)</p>
+  </div>
+
+  <div class="ph-wrap">
+    <div class="ph">
+      <div class="ph-status"><span>10:44</span><span>4G ▮▮▮</span></div>
+      <div class="ph-head"><span class="ph-back">‹ Paquetes</span></div>
+      <div class="ph-body">
+        <div class="ph-summary"><b>MAYANQUEEN</b><br>11 paquetes · MB92</div>
+        <div class="ph-label">Nombre de quien recibe</div>
+        <div class="ph-input">Tom Baker</div>
+        <div class="ph-label">Firma</div>
+        <div class="ph-sign">
+          <span class="clear">Borrar</span>
+          <span class="line"></span>
+          <span class="hint">Firmar con el dedo</span>
+          <svg viewBox="0 0 240 150" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <path d="M22 100 C 34 50, 48 50, 50 84 S 64 118, 76 72 S 96 38, 100 86 C 103 108, 112 108, 120 84 C 126 64, 136 62, 141 90 C 145 110, 157 104, 164 80 C 170 62, 184 64, 189 84 C 192 98, 204 96, 216 76"
+                  fill="none" stroke="#1d1d1f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="ph-primary" style="margin-top:0">Confirmar entrega</div>
+      </div>
+    </div>
+    <p class="cap"><span class="step">3</span>El crew pone su nombre y firma</p>
+  </div>
+</div>
+
+</body>
+</html>

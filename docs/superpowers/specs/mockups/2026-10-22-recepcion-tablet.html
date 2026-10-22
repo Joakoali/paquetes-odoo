@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boceto: recepción en la tablet</title>
+<style>
+:root { --text-primary:#1d1d1f; --text-secondary:#86868b; --bg-tertiary:#e5e5e7; }
+body { margin:0; padding:2rem; background:#f5f5f7; color:#1d1d1f; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; line-height:1.5; }
+h2 { font-size:1.5rem; margin:0 0 .5rem; }
+.subtitle { color:#86868b; margin:0 0 1.5rem; }
+.split { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+@media (max-width:700px) { .split { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<style>
+  .tb { background:#fff; color:#1d1d1f; border:10px solid #2b2b2e; border-radius:22px; overflow:hidden;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif; aspect-ratio: 4 / 3; display:flex;
+        flex-direction:column; font-size:13px; line-height:1.35; box-shadow:0 8px 28px rgba(0,0,0,.18); }
+  .tb * { box-sizing:border-box; }
+  .tb-top { display:flex; align-items:center; gap:6px; padding:8px 12px; border-bottom:1px solid #e5e5ea; background:#fafafa; }
+  .tb-tab { padding:7px 12px; border-radius:9px; font-weight:600; color:#6e6e73; font-size:13px; }
+  .tb-tab.on { background:#1d1d1f; color:#fff; }
+  .tb-wh { margin-left:auto; padding:4px 10px; border:1.5px solid #c7c7cc; border-radius:999px; font-weight:700; font-size:12px; }
+  .tb-user { color:#6e6e73; font-size:12px; margin-left:8px; }
+  .tb-body { flex:1; padding:12px 14px; display:flex; flex-direction:column; gap:9px; min-height:0; }
+  .tb-label { font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#8e8e93; }
+  .tb-search { border:2px solid #1d1d1f; border-radius:12px; padding:11px 12px; font-size:15px; color:#8e8e93; }
+  .tb-list { border:1px solid #e5e5ea; border-radius:12px; overflow:hidden; }
+  .tb-row { display:flex; align-items:center; gap:10px; padding:9px 12px; border-top:1px solid #e5e5ea; }
+  .tb-row:first-child { border-top:none; }
+  .tb-row .name { font-weight:700; font-size:15px; }
+  .tb-row .meta { color:#6e6e73; font-size:11.5px; }
+  .tb-row .count { margin-left:auto; font-weight:700; font-size:14px; white-space:nowrap; }
+  .tb-row .chev { color:#c7c7cc; font-size:18px; font-weight:700; }
+  .tb-primary { background:#0a7d32; color:#fff; border-radius:12px; padding:12px; text-align:center; font-weight:700; font-size:15px; }
+  .tb-secondary { border:1.5px solid #c7c7cc; border-radius:12px; padding:11px 14px; text-align:center; font-weight:600; color:#1d1d1f; }
+  .tb-sent { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11.5px; color:#6e6e73; }
+  .ok { color:#0a7d32; font-weight:700; }
+  .wait { color:#b25f00; font-weight:700; }
+  .tb-head { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid #e5e5ea; background:#fafafa; }
+  .tb-back { color:#0a5bd3; font-weight:600; }
+  .tb-boat { font-weight:800; font-size:18px; letter-spacing:.01em; }
+  .tb-chips { display:flex; flex-wrap:wrap; gap:5px; }
+  .tb-chip { border:1.5px solid #d1d1d6; border-radius:9px; padding:5px 9px; font-weight:600; font-size:12px; }
+  .tb-chip.on { background:#1d1d1f; border-color:#1d1d1f; color:#fff; }
+  .tb-scan { display:flex; align-items:center; gap:10px; border:2.5px solid #0a5bd3; border-radius:12px; padding:10px 12px;
+             font-size:15px; color:#8e8e93; box-shadow:0 0 0 4px rgba(10,91,211,.12); }
+  .tb-bars { width:26px; height:18px; flex-shrink:0;
+             background:repeating-linear-gradient(90deg,#1d1d1f 0 2px,transparent 2px 4px,#1d1d1f 4px 5px,transparent 5px 8px); }
+  .tb-flash { background:#e3f6e8; color:#0a5c26; border-radius:10px; padding:8px 12px; font-weight:700; font-size:14px; }
+  .tb-pk { display:flex; align-items:center; gap:10px; padding:6px 12px; border-top:1px solid #e5e5ea; font-family: ui-monospace, Consolas, monospace; font-size:12.5px; }
+  .tb-pk:first-child { border-top:none; }
+  .tb-pk .cour { font-family: system-ui, sans-serif; font-size:11px; font-weight:700; background:#f2f2f7; border-radius:6px; padding:2px 7px; }
+  .tb-pk .x { margin-left:auto; color:#aeaeb2; font-family: system-ui, sans-serif; font-weight:700; }
+  .tb-pk.dup { background:#fdeceb; color:#a1170f; }
+  .tb-pk.dup .why { font-family: system-ui, sans-serif; font-size:11px; font-weight:600; }
+  .tb-foot { display:flex; gap:10px; align-items:center; margin-top:auto; }
+  .tb-foot .tb-primary { flex:1; }
+  .cap { margin-top:10px; color:var(--text-secondary); font-size:.85rem; }
+</style>
+
+<h2>Recepción en la tablet — propuesta</h2>
+<p class="subtitle">Izquierda: el inicio de Recepción. Derecha: escaneando los paquetes de un barco. Nombres y códigos de ejemplo.</p>
+
+<div class="split">
+  <div>
+    <div class="tb">
+      <div class="tb-top">
+        <span class="tb-tab on">Recepción</span><span class="tb-tab">Entrega</span><span class="tb-tab">Pendientes</span>
+        <span class="tb-wh">MB92 ▾</span><span class="tb-user">Veronika</span>
+      </div>
+      <div class="tb-body">
+        <div class="tb-search">🔍&nbsp; Buscar barco para empezar una recepción…</div>
+        <div class="tb-label">Recepciones abiertas · 3</div>
+        <div class="tb-list">
+          <div class="tb-row"><div><div class="name">MAYANQUEEN</div><div class="meta">DHL 2 · UPS 1 · abierta 09:12</div></div><span class="count">3 paquetes</span><span class="chev">›</span></div>
+          <div class="tb-row"><div><div class="name">GAJA</div><div class="meta">PAACK 1 · abierta 10:40</div></div><span class="count">1 paquete</span><span class="chev">›</span></div>
+          <div class="tb-row"><div><div class="name">STORMBORN</div><div class="meta">Amazon 3 · Correos 2 · abierta 11:05</div></div><span class="count">5 paquetes</span><span class="chev">›</span></div>
+        </div>
+        <div class="tb-primary">Enviar las 3 a Odoo · 9 paquetes</div>
+        <div class="tb-label" style="margin-top:2px">Enviadas hoy</div>
+        <div class="tb-sent">
+          <span><span class="ok">✓</span> ARCTIC · 4 paquetes · MB92/IN/00231</span>
+          <span><span class="wait">⏳</span> H3 · 2 paquetes · enviando…</span>
+        </div>
+      </div>
+    </div>
+    <p class="cap">Lo abierto queda a la vista: si recargás o cambiás de pantalla, no se pierde nada.</p>
+  </div>
+
+  <div>
+    <div class="tb">
+      <div class="tb-head">
+        <span class="tb-back">‹ Recepciones</span>
+        <span class="tb-boat" style="margin-left:auto">MAYANQUEEN</span>
+        <span class="tb-wh" style="margin-left:auto">MB92</span>
+      </div>
+      <div class="tb-body">
+        <div class="tb-label">Courier (queda marcado hasta que lo cambies)</div>
+        <div class="tb-chips">
+          <span class="tb-chip">Amazon</span><span class="tb-chip">BPOST</span><span class="tb-chip">Correos</span><span class="tb-chip">CTT Express</span><span class="tb-chip">DHL</span><span class="tb-chip">Deutsche Post</span><span class="tb-chip">FedEx</span><span class="tb-chip">GLS</span><span class="tb-chip">MRW</span><span class="tb-chip">PAACK</span><span class="tb-chip">Royal Mail</span><span class="tb-chip">SEUR</span><span class="tb-chip on">UPS</span>
+        </div>
+        <div class="tb-scan"><span class="tb-bars"></span>Listo para escanear con la pistola…</div>
+        <div class="tb-flash">✓ 1Z84X0E06811549362 · UPS — agregado</div>
+        <div class="tb-label">Paquetes · 4 escaneados · 1 duplicado</div>
+        <div class="tb-list">
+          <div class="tb-pk">1Z84X0E06811549362 <span class="cour">UPS</span><span class="x">✕</span></div>
+          <div class="tb-pk">JJD000390007840583 <span class="cour">DHL</span><span class="x">✕</span></div>
+          <div class="tb-pk dup">⚠ JJD000390007711236 <span class="cour">DHL</span><span class="why">Duplicado: ya está en MB92/IN/00198 · no se envía</span><span class="x">✕</span></div>
+          <div class="tb-pk">JJD000390007840588 <span class="cour">DHL</span><span class="x">✕</span></div>
+        </div>
+        <div class="tb-foot">
+          <span class="tb-secondary">Dejar abierta</span>
+          <span class="tb-primary">Enviar a Odoo · 3 paquetes</span>
+        </div>
+      </div>
+    </div>
+    <p class="cap">Sin "tandas" ni "Listo": se elige el courier tocándolo y se sigue escaneando.</p>
+  </div>
+</div>
+
+</body>
+</html>
