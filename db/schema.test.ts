@@ -7,6 +7,7 @@ describe('schema', () => {
       'operarios', 'sesionesAuth', 'almacenes', 'operarioAlmacenes',
       'barcosCache', 'couriers', 'sesionesEscaneo', 'sesionCourierBatches',
       'sesionItems', 'trackingActivosCache', 'auditLog',
+      'courierUso', 'errorTipoEnum',
     ]
     for (const name of expected) {
       expect(schema).toHaveProperty(name)

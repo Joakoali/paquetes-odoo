@@ -20,8 +20,8 @@ async function requireAlmacenAccess(almacenId: number): Promise<string> {
 export async function loadPendingDeliveries(almacenId: number, barcoOdooId: number): Promise<PendingDelivery[]> {
   await requireAlmacenAccess(almacenId)
   const almacen = await db.query.almacenes.findFirst({ where: eq(almacenes.id, almacenId) })
-  if (!almacen?.odooPickingTypeId) throw new Error(`Almacén ${almacenId} no tiene odoo_picking_type_id configurado`)
-  return getPendingOutgoing(almacen.odooPickingTypeId, barcoOdooId)
+  if (!almacen?.odooInTypeId) throw new Error(`Almacén ${almacenId} no tiene odoo_picking_type_id configurado`)
+  return getPendingOutgoing(almacen.odooInTypeId, barcoOdooId)
 }
 
 export async function confirmEntregaSession(

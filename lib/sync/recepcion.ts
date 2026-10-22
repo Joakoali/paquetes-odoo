@@ -31,7 +31,7 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   const almacen = await db.query.almacenes.findFirst({
     where: (a, { eq: e }) => e(a.id, sesion.almacenId),
   })
-  if (!almacen?.odooPickingTypeId) {
+  if (!almacen?.odooInTypeId) {
     throw new Error(`Almacén ${sesion.almacenId} no tiene odoo_picking_type_id configurado`)
   }
 
@@ -58,7 +58,7 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
 
   let pickingId = sesion.odooPickingId
   if (!pickingId) {
-    pickingId = await createIncomingPicking(almacen.odooPickingTypeId, sesion.barcoOdooId)
+    pickingId = await createIncomingPicking(almacen.odooInTypeId, sesion.barcoOdooId)
     await db.update(sesionesEscaneo)
       .set({ odooPickingId: pickingId })
       .where(eq(sesionesEscaneo.id, sesionId))

@@ -14,7 +14,7 @@ const dbState = {
     id: 's1', almacenId: 1, barcoOdooId: 33, odooPickingId: null as number | null,
     estado: 'confirmada_pendiente_sync', intentos: 0, ultimoError: null as string | null,
   },
-  almacen: { id: 1, odooPickingTypeId: 7 },
+  almacen: { id: 1, odooInTypeId: 7 },
   batches: [
     { id: 'b1', sesionId: 's1', courierId: 10, odooMoveId: null as number | null },
     { id: 'b2', sesionId: 's1', courierId: 11, odooMoveId: null as number | null },

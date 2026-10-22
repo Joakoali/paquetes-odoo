@@ -21,7 +21,7 @@ export default async function MapeosPage() {
       {allAlmacenes.map((a) => (
         <form key={a.id} action={updateAlmacenMappingAction.bind(null, a.id)}>
           {a.prefijo}
-          <input name="odooPickingTypeId" type="number" defaultValue={a.odooPickingTypeId ?? ''} required />
+          <input name="odooPickingTypeId" type="number" defaultValue={a.odooInTypeId ?? ''} required />
           <button type="submit">Guardar</button>
         </form>
       ))}

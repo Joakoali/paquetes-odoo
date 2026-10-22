@@ -9,7 +9,7 @@ vi.mock('../../../lib/admin/operarioAlmacenes', () => ({
 vi.mock('../../../lib/odoo/pickings', () => ({ getPendingOutgoing: vi.fn() }))
 vi.mock('../../../lib/queue/publish', () => ({ publishSync: vi.fn() }))
 
-const state = { almacen: { id: 1, odooPickingTypeId: 7 }, sesiones: [] as any[] }
+const state = { almacen: { id: 1, odooInTypeId: 7 }, sesiones: [] as any[] }
 vi.mock('../../../db/client', () => ({
   db: {
     query: { almacenes: { findFirst: async () => state.almacen } },

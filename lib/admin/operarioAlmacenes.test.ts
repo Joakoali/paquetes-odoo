@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const links: Array<{ operarioId: string; almacenId: number }> = []
 const almacenRows = [
-  { id: 1, prefijo: 'MB92', nombre: 'Barcelona', odooPickingTypeId: null },
-  { id: 2, prefijo: 'MAD1', nombre: 'Madrid', odooPickingTypeId: null },
+  { id: 1, prefijo: 'MB92', nombre: 'Barcelona', odooInTypeId: null },
+  { id: 2, prefijo: 'MAD1', nombre: 'Madrid', odooInTypeId: null },
 ]
 
 vi.mock('../../db/client', () => {
