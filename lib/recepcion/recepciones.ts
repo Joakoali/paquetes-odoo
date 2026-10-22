@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, inArray, notExists, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
   barcosCache, couriers, sesionCourierBatches, sesionItems, sesionesEscaneo,
@@ -232,6 +232,8 @@ export async function borrarPaquete(itemId: string): Promise<void> {
 /**
  * Throws away an open recepción with everything in it: packages, courier batches and the recepción
  * itself. A recepción that is already gone is not an error. One that was sent is: it is the worker's now.
+ * This is the discard an operario asked for and confirmed, knowing what is in it. To clean up one that
+ * only looks empty use `descartarSiVacia`, which cannot throw away a package that landed meanwhile.
  */
 export async function descartarRecepcion(entrada: { sesionId: string; operarioId: string }): Promise<void> {
   const { sesionId, operarioId } = entrada
@@ -260,6 +262,47 @@ export async function descartarRecepcion(entrada: { sesionId: string; operarioId
   })
 }
 
+/**
+ * Discards the recepción only if it has no package at all, and says whether it did. It is the
+ * cleanup for one that merely looks empty (an operario leaves it, "Enviar" finds nothing in it),
+ * which can be a screen that is out of date: a package scanned meanwhile must not go with it, as it
+ * would with `descartarRecepcion`, which deletes whatever is inside. So emptiness is decided by the
+ * statements that delete, in one `db.batch`: first the courier batches with no package go, then the
+ * recepción goes if none of its batches is left; both only while it is a `recepcion` in `en_curso`.
+ * A scan that lands in the middle either finds the recepción alive or fails against a foreign key:
+ * nothing is lost without somebody knowing. False: it has a package, or it was sent, or it is gone.
+ */
+export async function descartarSiVacia(entrada: { sesionId: string; operarioId: string }): Promise<boolean> {
+  const { sesionId, operarioId } = entrada
+  const abierta = and(
+    eq(sesionesEscaneo.id, sesionId),
+    eq(sesionesEscaneo.tipo, 'recepcion'),
+    eq(sesionesEscaneo.estado, 'en_curso'),
+  )
+
+  const [, borradas] = await db.batch([
+    db.delete(sesionCourierBatches).where(and(
+      inArray(sesionCourierBatches.sesionId, db.select({ id: sesionesEscaneo.id }).from(sesionesEscaneo).where(abierta)),
+      notExists(db.select({ uno: sql`1` }).from(sesionItems).where(eq(sesionItems.courierBatchId, sesionCourierBatches.id))),
+    )),
+    db.delete(sesionesEscaneo)
+      .where(and(
+        abierta,
+        notExists(db.select({ uno: sql`1` }).from(sesionCourierBatches).where(eq(sesionCourierBatches.sesionId, sesionesEscaneo.id))),
+      ))
+      .returning({ almacenId: sesionesEscaneo.almacenId, barcoOdooId: sesionesEscaneo.barcoOdooId }),
+  ])
+  const borrada = borradas[0]
+  if (!borrada) return false
+
+  await registrarAuditoria({
+    operarioId,
+    accion: 'recepcion_descartada',
+    detalle: { sesionId, almacenId: borrada.almacenId, barcoOdooId: borrada.barcoOdooId, paquetes: 0 },
+  })
+  return true
+}
+
 export type ResultadoEnvio = 'enviada' | 'sin_paquetes_validos' | 'vacia_descartada'
 
 /**
@@ -282,20 +325,35 @@ async function reabrirTrasFallo(sesionId: string): Promise<void> {
 
 /**
  * Sends the recepción to Odoo, that is, hands it to the queue. An empty one is discarded instead
- * (`vacia_descartada`); one with only duplicados stays open (`sin_paquetes_validos`), since
- * there is nothing to send and somebody has to look at what Odoo already has. Otherwise it is marked
- * `confirmada_pendiente_sync` first, so that the worker finds it so the moment it is queued, and
- * then published. If publishing fails it goes back to `en_curso` and the error is passed on.
+ * (`vacia_descartada`), but only if it is still empty when it comes to deleting it: a package that
+ * landed since it was counted is sent like any other. One with only duplicados stays open
+ * (`sin_paquetes_validos`), since there is nothing to send and somebody has to look at what Odoo
+ * already has. Otherwise it is marked `confirmada_pendiente_sync` first, so that the worker finds it
+ * so the moment it is queued, and then published. If publishing fails it goes back to `en_curso`
+ * and the error is passed on.
  */
 export async function enviarRecepcion(entrada: { sesionId: string; operarioId: string }): Promise<ResultadoEnvio> {
+  return enviar(entrada, { descartarSiEstaVacia: true })
+}
+
+/**
+ * `enviarRecepcion`, with the choice of what to do with a recepción that has no package at all:
+ * discard it (what "Enviar" does) or leave it as it is and answer `sin_paquetes_validos` (what "Enviar
+ * todas" does: an operario may be about to scan into it). If the discard finds it is not empty any
+ * more (or that somebody sent or discarded it), it looks at the recepción again once, as an ordinary send.
+ */
+async function enviar(
+  entrada: { sesionId: string; operarioId: string },
+  opciones: { descartarSiEstaVacia: boolean },
+): Promise<ResultadoEnvio> {
   const { sesionId, operarioId } = entrada
   const sesion = await buscarRecepcion(sesionId)
   if (sesion?.estado !== 'en_curso') throw recepcionNoAbierta(sesion)
 
   const { validos, duplicados } = await contarPaquetes(sesionId)
-  if (validos + duplicados === 0) {
-    await descartarRecepcion({ sesionId, operarioId })
-    return 'vacia_descartada'
+  if (validos + duplicados === 0 && opciones.descartarSiEstaVacia) {
+    if (await descartarSiVacia(entrada)) return 'vacia_descartada'
+    return enviar(entrada, { descartarSiEstaVacia: false })
   }
   if (validos === 0) return 'sin_paquetes_validos'
 
@@ -324,10 +382,11 @@ export async function enviarRecepcion(entrada: { sesionId: string; operarioId: s
 
 /**
  * Sends every open recepción of the almacén that has at least one valid package (of one barco, if
- * `barcoOdooId` is given), oldest first, and says how many it sent. The empty ones and those with
- * only duplicados are left alone: an operario may be about to scan into them. A recepción that
- * somebody else sent or discarded meanwhile is skipped; any other failure (the publishing) stops
- * it there, with what was sent staying sent and the rest still open.
+ * `barcoOdooId` is given), oldest first, and says how many it sent. It never discards anything: the
+ * empty ones and those with only duplicados are left as they are, an operario may be about to scan
+ * into them, and so is one that became so after the list was read. A recepción that somebody else
+ * sent or discarded meanwhile is skipped; any other failure (the publishing) stops it there, with
+ * what was sent staying sent and the rest still open.
  */
 export async function enviarRecepcionesAbiertas(entrada: {
   almacenId: number
@@ -350,7 +409,8 @@ export async function enviarRecepcionesAbiertas(entrada: {
   let enviadas = 0
   for (const { id } of candidatas) {
     try {
-      if (await enviarRecepcion({ sesionId: id, operarioId: entrada.operarioId }) === 'enviada') enviadas += 1
+      const resultado = await enviar({ sesionId: id, operarioId: entrada.operarioId }, { descartarSiEstaVacia: false })
+      if (resultado === 'enviada') enviadas += 1
     } catch (error) {
       if (error instanceof RecepcionCerradaError || error instanceof EscaneoInvalidoError) continue
       throw error

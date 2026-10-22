@@ -22,8 +22,9 @@ import { publishSync } from '@/lib/queue/publish'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import {
-  abrirRecepcion, borrarPaquete, contarSinEnviarPorBarco, descartarRecepcion, enviarRecepcion, enviarRecepcionesAbiertas,
-  escanearPaquete, EscaneoInvalidoError, getRecepcion, listarEnviadasHoy, listarRecepcionesAbiertas, RecepcionCerradaError,
+  abrirRecepcion, borrarPaquete, contarSinEnviarPorBarco, descartarRecepcion, descartarSiVacia, enviarRecepcion,
+  enviarRecepcionesAbiertas, escanearPaquete, EscaneoInvalidoError, getRecepcion, listarEnviadasHoy, listarRecepcionesAbiertas,
+  RecepcionCerradaError,
   type PaqueteEscaneado, type ResultadoEscaneo,
 } from './recepciones'
 
@@ -595,6 +596,144 @@ async function escanearDuplicado(sesionId: string, codigo: string) {
 
 const segundosDesde = (fecha: Date) => Math.abs(Date.now() - fecha.getTime()) / 1000
 
+/** A courier batch with no package in it, like the one left behind when its only package is deleted. */
+async function tandaVacia(sesionId: string, courier: Courier = dhl) {
+  const [tanda] = await db.insert(sesionCourierBatches).values({ sesionId, courierId: courier.id }).returning()
+  return tanda
+}
+
+/**
+ * Runs `durante` once, right before the next `db.batch` (the delete of a discard) starts: what another
+ * tablet does after a function has looked at a recepción and before it deletes from it.
+ */
+function antesDelBatch(durante: () => Promise<unknown>) {
+  const testDb = db as unknown as TestDb
+  const batchReal = testDb.batch
+  vi.spyOn(testDb, 'batch').mockImplementationOnce((async (consultas: PromiseLike<unknown>[]) => {
+    await durante()
+    return batchReal(consultas as [PromiseLike<unknown>])
+  }) as never)
+}
+
+describe('descartarSiVacia', () => {
+  it('discards a recepción nobody has scanned into, and audits it', async () => {
+    const sesionId = await abrir()
+
+    expect(await descartarSiVacia({ sesionId, operarioId: eduardo.id })).toBe(true)
+
+    expect(await db.select().from(sesionesEscaneo)).toEqual([])
+    expect(registrarAuditoria).toHaveBeenCalledOnce()
+    expect(registrarAuditoria).toHaveBeenCalledWith({
+      operarioId: eduardo.id,
+      accion: 'recepcion_descartada',
+      detalle: { sesionId, almacenId: mb92.id, barcoOdooId: 673, paquetes: 0 },
+    })
+  })
+
+  it('discards a recepción whose packages were all deleted, together with the empty courier batches they left', async () => {
+    const sesionId = await abrir()
+    const paquete = paqueteDe(await escanear(sesionId, 'A1'))
+    await borrarPaquete(paquete.id)
+    await tandaVacia(sesionId, gls)
+
+    expect(await descartarSiVacia({ sesionId, operarioId: eduardo.id })).toBe(true)
+
+    expect(await db.select().from(sesionesEscaneo)).toEqual([])
+    expect(await db.select().from(sesionCourierBatches)).toEqual([])
+    expect(registrarAuditoria).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a recepción that has a package, and says it did not discard it', async () => {
+    const sesionId = await recepcionCon(673, ['A1'])
+
+    expect(await descartarSiVacia({ sesionId, operarioId: eduardo.id })).toBe(false)
+
+    expect(await filaSesion(sesionId)).toMatchObject({ estado: 'en_curso' })
+    expect(await guardados(sesionId)).toMatchObject([{ trackingNumber: 'A1', estado: 'ok' }])
+    expect(await db.select().from(sesionCourierBatches)).toHaveLength(1)
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('keeps a recepción that has only a duplicado: it is a package somebody has to look at', async () => {
+    const sesionId = await abrir()
+    await escanearDuplicado(sesionId, 'YA-ESTABA')
+
+    expect(await descartarSiVacia({ sesionId, operarioId: eduardo.id })).toBe(false)
+
+    expect(await guardados(sesionId)).toMatchObject([{ trackingNumber: 'YA-ESTABA', estado: 'duplicado' }])
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('keeps the packages of a courier batch even when the recepción has another batch that is empty', async () => {
+    const sesionId = await recepcionCon(673, ['A1', 'A2'])
+    await tandaVacia(sesionId, gls)
+
+    expect(await descartarSiVacia({ sesionId, operarioId: eduardo.id })).toBe(false)
+
+    expect(await guardados(sesionId)).toMatchObject([{ trackingNumber: 'A1' }, { trackingNumber: 'A2' }])
+    expect(await filaSesion(sesionId)).toMatchObject({ estado: 'en_curso' })
+  })
+
+  it('keeps a recepción when a scan gets in just before the delete, and so keeps that package', async () => {
+    const sesionId = await abrir()
+    antesDelBatch(async () => {
+      await escanear(sesionId, 'A1', { operario: eduardo })
+    })
+
+    expect(await descartarSiVacia({ sesionId, operarioId: veronika.id })).toBe(false)
+
+    expect(await filaSesion(sesionId)).toMatchObject({ estado: 'en_curso' })
+    expect(await guardados(sesionId)).toMatchObject([{ trackingNumber: 'A1', operarioId: eduardo.id }])
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it.each(['confirmada_pendiente_sync', 'sincronizada', 'error'] as const)(
+    'does not touch a recepción that was already sent (%s), not even its empty courier batch',
+    async (estado) => {
+      const sesionId = await abrir()
+      await tandaVacia(sesionId)
+      await db.update(sesionesEscaneo).set({ estado }).where(eq(sesionesEscaneo.id, sesionId))
+
+      expect(await descartarSiVacia({ sesionId, operarioId: eduardo.id })).toBe(false)
+
+      expect(await filaSesion(sesionId)).toMatchObject({ estado })
+      expect(await db.select().from(sesionCourierBatches)).toHaveLength(1)
+      expect(registrarAuditoria).not.toHaveBeenCalled()
+    },
+  )
+
+  it('says false, and audits nothing, when the recepción is already gone', async () => {
+    expect(await descartarSiVacia({ sesionId: NO_EXISTE, operarioId: eduardo.id })).toBe(false)
+
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('never touches an entrega, with or without an empty courier batch', async () => {
+    const sinTanda = await crearSesion({ tipo: 'entrega', barcoOdooId: 674 })
+    const conTanda = await crearSesion({ tipo: 'entrega', barcoOdooId: 675 })
+    await tandaVacia(conTanda.id)
+
+    expect(await descartarSiVacia({ sesionId: sinTanda.id, operarioId: eduardo.id })).toBe(false)
+    expect(await descartarSiVacia({ sesionId: conTanda.id, operarioId: eduardo.id })).toBe(false)
+
+    expect((await db.select().from(sesionesEscaneo)).map((s) => s.id).sort()).toEqual([sinTanda.id, conTanda.id].sort())
+    expect(await db.select().from(sesionCourierBatches)).toHaveLength(1)
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('discards only the recepción asked for, and not the other empty ones', async () => {
+    const descartada = await abrir(673)
+    const otra = await abrir(674)
+    await tandaVacia(descartada)
+    await tandaVacia(otra)
+
+    expect(await descartarSiVacia({ sesionId: descartada, operarioId: eduardo.id })).toBe(true)
+
+    expect((await db.select().from(sesionesEscaneo)).map((s) => s.id)).toEqual([otra])
+    expect(await db.select().from(sesionCourierBatches)).toMatchObject([{ sesionId: otra }])
+  })
+})
+
 describe('enviarRecepcion', () => {
   let sesionId: string
 
@@ -673,6 +812,85 @@ describe('enviarRecepcion', () => {
     expect(await db.select().from(sesionesEscaneo).where(eq(sesionesEscaneo.id, vacia))).toEqual([])
     expect(await db.select().from(sesionCourierBatches).where(eq(sesionCourierBatches.sesionId, vacia))).toEqual([])
     expect(publishSync).not.toHaveBeenCalled()
+  })
+
+  it('does not throw away a package that lands after it counted none: it sends the recepción with that package', async () => {
+    const vacia = await abrir(674)
+    let escaneo: ResultadoEscaneo | undefined
+    antesDelBatch(async () => {
+      // Another tablet scans a package right now: after "Enviar" found the recepción empty, before it deletes it.
+      escaneo = await escanear(vacia, 'A1', { operario: veronika })
+    })
+
+    const resultado = await enviarRecepcion({ sesionId: vacia, operarioId: eduardo.id })
+
+    expect(escaneo).toMatchObject({ tipo: 'agregado' }) // the operario was told that it went in...
+    expect(resultado).toBe('enviada') // ...so the recepción is not empty any more, and is not 'vacia_descartada'
+    expect(await filaSesion(vacia)).toMatchObject({ estado: 'confirmada_pendiente_sync' })
+    expect(await guardados(vacia)).toMatchObject([{ trackingNumber: 'A1', operarioId: veronika.id }])
+    expect(publishSync).toHaveBeenCalledOnce()
+    expect(publishSync).toHaveBeenCalledWith({ sesionId: vacia })
+    expect(registrarAuditoria).toHaveBeenCalledOnce()
+    expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({ accion: 'recepcion_enviada' }))
+  })
+
+  it('leaves the recepción open, with what landed, when that is a duplicado: there is still nothing to send', async () => {
+    const vacia = await abrir(674)
+    await db.insert(trackingActivosCache).values({ trackingNumber: 'YA-ESTABA', odooPickingId: 9, odooPickingRef: 'MB92/IN/00198' })
+    antesDelBatch(async () => {
+      await escanear(vacia, 'YA-ESTABA')
+    })
+
+    expect(await enviarRecepcion({ sesionId: vacia, operarioId: eduardo.id })).toBe('sin_paquetes_validos')
+
+    expect(await filaSesion(vacia)).toMatchObject({ estado: 'en_curso' })
+    expect(await guardados(vacia)).toMatchObject([{ trackingNumber: 'YA-ESTABA', estado: 'duplicado' }])
+    expect(publishSync).not.toHaveBeenCalled()
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('looks again only once: if what landed is gone by then, the recepción is left open and nothing is discarded', async () => {
+    const vacia = await abrir(674)
+    const testDb = db as unknown as TestDb
+    const batchReal = testDb.batch
+    vi.spyOn(testDb, 'batch').mockImplementationOnce((async (consultas: PromiseLike<unknown>[]) => {
+      const paquete = paqueteDe(await escanear(vacia, 'A1')) // lands before the discard, which so keeps the recepción...
+      const resultado = await batchReal(consultas as [PromiseLike<unknown>])
+      await borrarPaquete(paquete.id) // ...and is taken out again before "Enviar" looks the second time
+      return resultado
+    }) as never)
+
+    expect(await enviarRecepcion({ sesionId: vacia, operarioId: eduardo.id })).toBe('sin_paquetes_validos')
+
+    expect(await filaSesion(vacia)).toMatchObject({ estado: 'en_curso' })
+    expect(publishSync).not.toHaveBeenCalled()
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('says the recepción does not exist when somebody else discarded it between the count and the discard', async () => {
+    const vacia = await abrir(674)
+    antesDelBatch(async () => {
+      await db.delete(sesionesEscaneo).where(eq(sesionesEscaneo.id, vacia))
+    })
+
+    const error = await enviarRecepcion({ sesionId: vacia, operarioId: eduardo.id }).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(EscaneoInvalidoError)
+    expect((error as Error).message).toBe('La recepción no existe.')
+    expect(publishSync).not.toHaveBeenCalled()
+  })
+
+  it('says it was already sent when somebody else sent it between the count and the discard', async () => {
+    const vacia = await abrir(674)
+    antesDelBatch(async () => {
+      await escanear(vacia, 'A1')
+      await db.update(sesionesEscaneo).set({ estado: 'confirmada_pendiente_sync' }).where(eq(sesionesEscaneo.id, vacia))
+    })
+
+    await expect(enviarRecepcion({ sesionId: vacia, operarioId: eduardo.id })).rejects.toThrow(RecepcionCerradaError)
+
+    expect(await guardados(vacia)).toMatchObject([{ trackingNumber: 'A1' }])
+    expect(publishSync).not.toHaveBeenCalled() // the one who sent it has published it
   })
 
   it('does not send a recepción with only duplicados, and leaves it open as it was', async () => {
@@ -878,7 +1096,7 @@ describe('enviarRecepcionesAbiertas', () => {
     expect(idsPublicados()).toEqual([primera, ultima])
   })
 
-  it('does not count a recepción that has nothing left to send by the time its turn comes', async () => {
+  it('neither counts nor discards a recepción that has nothing left to send by the time its turn comes', async () => {
     const primera = await recepcionCon(673, ['A1'])
     const sinPaquetes = await recepcionCon(674, ['B1'])
     const soloDuplicados = await recepcionCon(675, ['C1'])
@@ -898,6 +1116,11 @@ describe('enviarRecepcionesAbiertas', () => {
 
     expect(idsPublicados()).toEqual([primera, ultima])
     expect(await filaSesion(soloDuplicados)).toMatchObject({ estado: 'en_curso' })
+    // The second one was emptied meanwhile. Sending all never discards: it is just not sent, and stays as it is
+    // (an operario may be looking at it right now, with their next scan in hand).
+    expect(await filaSesion(sinPaquetes)).toMatchObject({ estado: 'en_curso' })
+    expect(await db.select().from(sesionCourierBatches).where(eq(sesionCourierBatches.sesionId, sinPaquetes))).toHaveLength(1)
+    expect(registrarAuditoria).not.toHaveBeenCalledWith(expect.objectContaining({ accion: 'recepcion_descartada' }))
   })
 
   it('stops at the first publishing failure: what was sent stays sent, the rest stays open and untouched', async () => {
