@@ -1,81 +1,97 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../odoo/client', () => ({ odooCall: vi.fn() }))
-const rows: Array<{ odooId: number; nombre: string }> = []
-const upsert = { set: null as any }
-vi.mock('../../db/client', () => ({
-  db: {
-    insert: () => ({
-      values: (v: any[]) => ({
-        onConflictDoUpdate: async (config: any) => {
-          upsert.set = config.set
-          // Postgres semantics: an existing row keeps whatever the set clause
-          // writes. `excluded.nombre` is the incoming name; the column itself
-          // would be a self-assignment no-op.
-          const takesIncomingNombre = JSON.stringify(config.set?.nombre?.queryChunks ?? [])
-            .includes('excluded.nombre')
-          for (const row of v) {
-            const existing = rows.find((r) => r.odooId === row.odooId)
-            if (!existing) rows.push({ ...row })
-            else if (takesIncomingNombre) existing.nombre = row.nombre
-          }
-        },
-      }),
-    }),
-    select: () => ({
-      from: () => ({
-        where: (whereCondition: any) => {
-          // Test-only mock: filter by ilike condition from drizzle expression
-          let filterPattern: string | null = null
-          if (Array.isArray((whereCondition as any)?.queryChunks)) {
-            // Extract the pattern string from queryChunks
-            // For ilike expressions, the pattern is a direct string chunk (not wrapped in Param)
-            const chunks = (whereCondition as any).queryChunks
-            const stringChunk = chunks.find((chunk: any) => typeof chunk === 'string')
-            if (stringChunk) filterPattern = stringChunk
-          }
-          if (!filterPattern) {
-            // Return a thenable that resolves to all rows
-            return Promise.resolve(rows)
-          }
-          // Apply case-insensitive filter using ilike pattern (%query%)
-          const lowerPattern = filterPattern.toLowerCase()
-          const filtered = rows.filter((r) => r.nombre.toLowerCase().includes(lowerPattern.replace(/%/g, '')))
-          return Promise.resolve(filtered)
-        },
-      }),
-    }),
-  },
-}))
+vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
 
-import { odooCall } from '../odoo/client'
-import { refreshBarcosCache, searchBarcos } from './barcos'
+import { db } from '@/db/client'
+import { barcosCache } from '@/db/schema'
+import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
+import { seedBarco } from '@/lib/testing/seed'
+import { BUSQUEDA_BARCOS_LIMITE, searchBarcos } from './barcos'
 
-beforeEach(() => { rows.length = 0; upsert.set = null })
+beforeEach(() => resetTestDb(db as unknown as TestDb))
 
-describe('barcos cache', () => {
-  it('refreshBarcosCache upserts from project.project', async () => {
-    vi.mocked(odooCall).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
-    await refreshBarcosCache()
-    expect(odooCall).toHaveBeenCalledWith('project.project', 'search_read', { domain: [], fields: ['name'] })
-    expect(rows).toEqual([{ odooId: 1, nombre: 'MOONSHADOW' }])
+const nombres = (barcos: Array<{ nombre: string }>) => barcos.map((b) => b.nombre)
+
+describe('searchBarcos', () => {
+  it('returns only active barcos, ordered by name, at most 20', async () => {
+    const todos = Array.from({ length: 25 }, (_, i) => `BARCO ${String(i + 1).padStart(2, '0')}`)
+    // Inserted from the last to the first, so the order cannot come from the insertion order.
+    await db.insert(barcosCache).values([...todos].reverse().map((nombre, i) => ({ odooId: 100 + i, nombre })))
+    await seedBarco(db, { odooId: 999, nombre: 'BARCO 00 (ARCHIVADO)', activo: false })
+
+    const resultado = await searchBarcos('barco')
+
+    expect(BUSQUEDA_BARCOS_LIMITE).toBe(20)
+    expect(resultado).toHaveLength(20)
+    expect(nombres(resultado)).toEqual(todos.slice(0, 20))
   })
 
-  it('refreshBarcosCache updates the name of a renamed barco', async () => {
-    vi.mocked(odooCall).mockResolvedValue([{ id: 1, name: 'MOONSHADOW' }])
-    await refreshBarcosCache()
+  it('does not return a barco that is no longer in Odoo', async () => {
+    await seedBarco(db, { odooId: 1, nombre: 'MOONSHADOW' })
+    await seedBarco(db, { odooId: 2, nombre: 'MOONLIGHT', activo: false })
 
-    vi.mocked(odooCall).mockResolvedValue([{ id: 1, name: 'MOONSHADOW II' }])
-    await refreshBarcosCache()
-
-    expect(rows).toEqual([{ odooId: 1, nombre: 'MOONSHADOW II' }])
+    expect(nombres(await searchBarcos('moon'))).toEqual(['MOONSHADOW'])
   })
 
-  it('searchBarcos filters by ilike on nombre', async () => {
-    rows.push({ odooId: 1, nombre: 'MOONSHADOW' })
-    rows.push({ odooId: 2, nombre: 'SUNSET' })
-    const result = await searchBarcos('moon')
-    expect(result).toHaveLength(1)
-    expect(result[0]).toEqual({ odooId: 1, nombre: 'MOONSHADOW' })
+  it('orders by name ignoring case', async () => {
+    await seedBarco(db, { odooId: 1, nombre: 'zeta' })
+    await seedBarco(db, { odooId: 2, nombre: 'Alfa' })
+    await seedBarco(db, { odooId: 3, nombre: 'MIKE' })
+    await seedBarco(db, { odooId: 4, nombre: 'bravo' })
+
+    expect(nombres(await searchBarcos(''))).toEqual(['Alfa', 'bravo', 'MIKE', 'zeta'])
+  })
+
+  it('finds the text anywhere in the name, whatever its case', async () => {
+    await seedBarco(db, { odooId: 1, nombre: 'MOONSHADOW' })
+    await seedBarco(db, { odooId: 2, nombre: 'BLUE MOON' })
+    await seedBarco(db, { odooId: 3, nombre: 'SUNSET' })
+
+    expect(nombres(await searchBarcos('moon'))).toEqual(['BLUE MOON', 'MOONSHADOW'])
+    expect(await searchBarcos('xyz')).toEqual([])
+  })
+
+  it('treats % and _ in the query literally', async () => {
+    await seedBarco(db, { odooId: 1, nombre: 'AB_CD' })
+    await seedBarco(db, { odooId: 2, nombre: 'ABXCD' })
+    await seedBarco(db, { odooId: 3, nombre: '50% OFF' })
+    await seedBarco(db, { odooId: 4, nombre: '500 OFF' })
+    await seedBarco(db, { odooId: 5, nombre: 'BACK\\SLASH' })
+    await seedBarco(db, { odooId: 6, nombre: 'BACKSLASH' })
+
+    expect(nombres(await searchBarcos('b_c'))).toEqual(['AB_CD'])
+    expect(nombres(await searchBarcos('%'))).toEqual(['50% OFF'])
+    expect(nombres(await searchBarcos('0%'))).toEqual(['50% OFF'])
+    expect(nombres(await searchBarcos('K\\S'))).toEqual(['BACK\\SLASH'])
+    expect(nombres(await searchBarcos('\\'))).toEqual(['BACK\\SLASH']) // a lone backslash must not break the pattern
+  })
+
+  it('labels same-named active barcos with their Odoo id', async () => {
+    await seedBarco(db, { odooId: 942, nombre: 'H3' })
+    await seedBarco(db, { odooId: 943, nombre: 'H3' })
+
+    expect((await searchBarcos('h3')).map((b) => b.etiqueta)).toEqual(['H3 · #942', 'H3 · #943'])
+  })
+
+  it('labels with the plain name the barcos whose name is not repeated in the result', async () => {
+    await seedBarco(db, { odooId: 942, nombre: 'H3' })
+    await seedBarco(db, { odooId: 943, nombre: 'H3' })
+    await seedBarco(db, { odooId: 950, nombre: 'H30' })
+
+    expect((await searchBarcos('h3')).map((b) => b.etiqueta)).toEqual(['H3 · #942', 'H3 · #943', 'H30'])
+  })
+
+  it('compares names ignoring case when deciding to label', async () => {
+    await seedBarco(db, { odooId: 942, nombre: 'H3' })
+    await seedBarco(db, { odooId: 943, nombre: 'h3' })
+
+    expect((await searchBarcos('h3')).map((b) => b.etiqueta)).toEqual(['H3 · #942', 'h3 · #943'])
+  })
+
+  it('does not label a barco because of a same-named one that is inactive', async () => {
+    await seedBarco(db, { odooId: 942, nombre: 'H3' })
+    await seedBarco(db, { odooId: 943, nombre: 'H3', activo: false })
+
+    expect(await searchBarcos('h3')).toEqual([{ odooId: 942, nombre: 'H3', etiqueta: 'H3' }])
   })
 })
