@@ -5,6 +5,7 @@ import { db } from '@/db/client'
 import { sesionesEscaneo } from '@/db/schema'
 import { syncRecepcionSession } from '@/lib/sync/recepcion'
 import { syncEntregaSession } from '@/lib/sync/entrega'
+import { registrarFalloSync } from '@/lib/sync/estado'
 
 // A session can hold dozens of packages, each an Odoo round trip throttled to
 // ~1 req/s — well past Vercel's default function timeout.
@@ -35,12 +36,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     return NextResponse.json({ ok: true })
   } catch (err) {
+    // How many times QStash has already redelivered this message: 0 on the first delivery.
+    const reintentosHechos = Number(request.headers.get('upstash-retried') ?? 0)
+    const { final, tipo } = await registrarFalloSync({ sesionId, error: err, reintentosHechos })
     const message = err instanceof Error ? err.message : String(err)
-    await db.update(sesionesEscaneo).set({
-      estado: 'error',
-      intentos: sesion.intentos + 1,
-      ultimoError: message,
-    }).where(eq(sesionesEscaneo.id, sesionId))
-    return NextResponse.json({ error: message }, { status: 500 })
+
+    // A failure that will not get better (or has used up its retries) answers 200 on purpose:
+    // QStash takes the message as delivered and the queue moves on. The session is already in
+    // `error` and shows up in Pendientes. A 5xx would make QStash retry it and, with
+    // parallelism 1, every other send would wait behind it. Only a failure that a retry can
+    // still fix answers 500.
+    return NextResponse.json({ ok: false, final, tipo, error: message }, { status: final ? 200 : 500 })
   }
 }

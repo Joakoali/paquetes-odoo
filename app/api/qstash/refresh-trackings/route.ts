@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyQstashSignature } from '@/lib/queue/verify'
-import { refreshMaestros } from '@/lib/maestros/refresh'
+import { refreshTrackingActivos } from '@/lib/cache/trackingActivos'
+import { registrarAuditoria } from '@/lib/audit'
 
-// Four reads against Odoo (almacenes, couriers, barcos and courier usage), spaced
-// 1 s apart by odooCall and queued with the session syncs on the same
-// parallelism:1 queue.
-export const maxDuration = 60
+// The cache is rebuilt from pages of 2000 move lines, one Odoo request per second,
+// and the job waits its turn on the same parallelism:1 queue as the session syncs.
+export const maxDuration = 300
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const body = await request.text()
@@ -15,8 +15,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    await refreshMaestros()
-    return NextResponse.json({ ok: true })
+    const resumen = await refreshTrackingActivos()
+    await registrarAuditoria({ operarioId: null, accion: 'admin_refresco', detalle: { ...resumen } })
+    return NextResponse.json({ ok: true, ...resumen })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
