@@ -58,7 +58,9 @@ export async function recordSyncedTrackings(
  *
  * 1. `inicio` is noted before Odoo is read.
  * 2. All the pages are read (`odooCall` spaces the requests 1 s apart) and only then is
- *    anything written.
+ *    anything written. If Odoo sent no line at all, nothing is written or deleted and `filas`
+ *    is 0: an empty answer is more likely a failed or filtered read than "Odoo has none", and
+ *    the sweep would empty the cache (`refreshMaestros` follows the same rule).
  * 3. Every tracking Odoo has is upserted, which stamps it with a time that is not before `inicio`.
  * 4. What still carries an older time is no longer in Odoo (its picking was cancelled) and is
  *    deleted. A row a sync wrote while this ran is newer than `inicio`, so it stays even
@@ -78,6 +80,7 @@ export async function refreshTrackingActivos(): Promise<{ filas: number }> {
     }
     if (pagina.length < PAGINA_TRACKINGS) break
   }
+  if (porTracking.size === 0) return { filas: 0 }
 
   const filas = [...porTracking.values()].map((linea) => ({
     trackingNumber: linea.trackingNumber,

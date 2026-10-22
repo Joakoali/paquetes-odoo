@@ -220,6 +220,31 @@ describe('refreshTrackingActivos', () => {
     expect(await buscarDuplicado('VIGENTE')).toEqual({ odooPickingRef: 'MB92/IN/00198' })
   })
 
+  it('leaves the cache untouched when Odoo returns no lines at all', async () => {
+    await db.insert(trackingActivosCache).values({
+      trackingNumber: 'VIEJO', odooPickingId: 1, odooPickingRef: 'MB92/IN/00001', updatedAt: ANTES,
+    })
+    odooResponde([]) // an empty first page: more likely a failed or filtered read than "Odoo has none"
+
+    const resultado = await refreshTrackingActivos()
+
+    expect(resultado).toEqual({ filas: 0 })
+    expect(odooCall).toHaveBeenCalledTimes(1)
+    expect(await cache()).toMatchObject([
+      { trackingNumber: 'VIEJO', odooPickingId: 1, odooPickingRef: 'MB92/IN/00001', updatedAt: ANTES },
+    ])
+  })
+
+  it('still removes what Odoo no longer has when only the last page is empty', async () => {
+    await db.insert(trackingActivosCache).values({ trackingNumber: 'VIEJO', odooPickingId: 1, updatedAt: ANTES })
+    odooResponde(lineas('A', PAGINA_TRACKINGS), [])
+
+    await refreshTrackingActivos()
+
+    expect(await buscarDuplicado('VIEJO')).toBeNull()
+    expect(await buscarDuplicado('A0')).not.toBeNull()
+  })
+
   it('updates the picking and the reference of a tracking that Odoo has moved', async () => {
     await db.insert(trackingActivosCache).values({
       trackingNumber: 'JJD1', odooPickingId: 1, odooPickingRef: 'MB92/IN/00001', updatedAt: ANTES,
