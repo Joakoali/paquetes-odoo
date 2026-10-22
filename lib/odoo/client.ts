@@ -1,32 +1,12 @@
+import { ConfiguracionError, OdooError } from '../errores'
+
+// OdooError is defined in errores.ts, next to the classification that reads it, and
+// re-exported so it can still be imported together with odooCall. errores.ts must not
+// import this file: odooCall throws ConfiguracionError, so the two would import each other.
+export { OdooError }
+
 /** Past this Odoo is down or overloaded, and a hung call would hold the whole queue. */
 export const ODOO_TIMEOUT_MS = 30_000
-
-/** `key` of an Odoo answer body when it is a non-empty string, else null. */
-function textField(data: unknown, key: 'name' | 'message'): string | null {
-  if (typeof data !== 'object' || data === null) return null
-  const value = (data as Record<string, unknown>)[key]
-  return typeof value === 'string' && value !== '' ? value : null
-}
-
-/**
- * A non-2xx answer from Odoo, or a 2xx whose body is not JSON. `data` is what
- * came back: the parsed JSON, the raw text when it was not JSON (a proxy error
- * page), or null for an empty body. `odooName` is the exception Odoo reports
- * (`odoo.exceptions.UserError`, …); it is only there when Odoo itself answered,
- * which is how a rejected request is told apart from a gateway error.
- */
-export class OdooError extends Error {
-  readonly status: number
-  readonly odooName: string | null
-  readonly data: unknown
-
-  constructor(info: { status: number; data: unknown }) {
-    super(textField(info.data, 'message') ?? `Odoo call failed: ${JSON.stringify(info.data)}`)
-    this.status = info.status
-    this.odooName = textField(info.data, 'name')
-    this.data = info.data
-  }
-}
 
 const MIN_INTERVAL_MS = 1000
 
@@ -54,7 +34,8 @@ async function throttle(): Promise<void> {
  * raw result — no `{ "result": … }` envelope. Errors come back with a non-2xx
  * status and an `{ name, message, arguments, … }` body, thrown as `OdooError`.
  * A call that gets no answer within `ODOO_TIMEOUT_MS` is aborted and rejects
- * with the `TimeoutError` that `fetch` raises, not with an `OdooError`.
+ * with the `TimeoutError` that `fetch` raises, not with an `OdooError`. Without
+ * `ODOO_BASE_URL` and `ODOO_API_KEY` it throws `ConfiguracionError` and calls nothing.
  *
  * NOT the classic JSON-RPC `{ args, kwargs }` shape — that returns 422
  * "missing a required argument" against this instance.
@@ -67,7 +48,7 @@ export async function odooCall<T>(
   const rawBase = process.env.ODOO_BASE_URL
   const apiKey = process.env.ODOO_API_KEY
   if (!rawBase || !apiKey) {
-    throw new Error('ODOO_BASE_URL and ODOO_API_KEY must be set')
+    throw new ConfiguracionError('ODOO_BASE_URL y ODOO_API_KEY tienen que estar configurados')
   }
   const baseUrl = rawBase.replace(/\/+$/, '')
 

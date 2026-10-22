@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import type { ErrorTipo } from '../db/schema'
-import { OdooError } from './odoo/client'
 import {
   ConfiguracionError,
   ErrorParaOperario,
+  OdooError,
   RespuestaOdooInesperadaError,
   clasificarError,
   mensajeProblema,
@@ -20,7 +20,15 @@ describe('clasificarError', () => {
     { label: 'OdooError 504', err: new OdooError({ status: 504, data: null }), tipo: 'conexion' },
     { label: 'OdooError 500 with an HTML page', err: new OdooError({ status: 500, data: 'bad gateway html' }), tipo: 'conexion' },
     { label: 'OdooError 500 with an empty body', err: new OdooError({ status: 500, data: null }), tipo: 'conexion' },
+    { label: 'OdooError 408', err: new OdooError({ status: 408, data: null }), tipo: 'conexion' },
+    {
+      label: 'OdooError 520 without an Odoo exception',
+      err: new OdooError({ status: 520, data: '<html>Web server is returning an unknown error</html>' }),
+      tipo: 'conexion',
+    },
     { label: 'TypeError fetch failed', err: new TypeError('fetch failed'), tipo: 'conexion' },
+    // What reading the body rejects with when the connection is cut mid-response.
+    { label: 'TypeError terminated', err: new TypeError('terminated'), tipo: 'conexion' },
     { label: 'error named TimeoutError', err: Object.assign(new Error('t'), { name: 'TimeoutError' }), tipo: 'conexion' },
     { label: 'error named AbortError', err: Object.assign(new Error('a'), { name: 'AbortError' }), tipo: 'conexion' },
     {
@@ -42,7 +50,8 @@ describe('clasificarError', () => {
       tipo: 'odoo',
     },
     { label: 'OdooError 404 with no Odoo exception', err: new OdooError({ status: 404, data: 'Not Found' }), tipo: 'odoo' },
-    { label: 'TypeError that is not a fetch failure', err: new TypeError('x is not a function'), tipo: 'odoo' },
+    // A code bug must not be retried as if it were a network problem.
+    { label: 'TypeError from a code bug', err: new TypeError('Cannot read properties of undefined'), tipo: 'odoo' },
     { label: 'RespuestaOdooInesperadaError', err: new RespuestaOdooInesperadaError('x'), tipo: 'odoo' },
     { label: 'plain Error', err: new Error('picking 5 no existe en Odoo'), tipo: 'odoo' },
     { label: 'thrown string', err: 'boom', tipo: 'odoo' },

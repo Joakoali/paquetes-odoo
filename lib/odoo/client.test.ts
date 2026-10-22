@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { odooCall, OdooError } from './client'
+import { ConfiguracionError } from '../errores'
 
 beforeEach(() => {
   process.env.ODOO_BASE_URL = 'https://test.odoo.com/'
@@ -80,9 +81,25 @@ describe('odooCall', () => {
     expect(fetchMock.mock.calls[0][1].signal).toBe(timeout.mock.results[0].value)
   })
 
-  it('throws when ODOO_BASE_URL or ODOO_API_KEY is missing', async () => {
-    delete process.env.ODOO_API_KEY
-    await expect(odooCall('res.users', 'search', { domain: [] })).rejects.toThrow(/must be set/)
+  it('cuts a long non-JSON body in the message but keeps it whole in data', async () => {
+    const page = 'x'.repeat(2000)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 502, text: async () => page }))
+
+    const err = (await odooCall('stock.move', 'create', {}).catch((e) => e)) as OdooError
+
+    expect(err).toBeInstanceOf(OdooError)
+    expect(err.message.length).toBeLessThanOrEqual('Odoo call failed: '.length + 500)
+    expect(err.message).toMatch(/^Odoo call failed: "xxxx/)
+    expect(err.data).toBe(page)
+  })
+
+  it.each(['ODOO_BASE_URL', 'ODOO_API_KEY'])('throws ConfiguracionError when %s is missing', async (variable) => {
+    delete process.env[variable]
+
+    const err = (await odooCall('res.users', 'search', { domain: [] }).catch((e) => e)) as ConfiguracionError
+
+    expect(err).toBeInstanceOf(ConfiguracionError)
+    expect(err.message).toMatch(/ODOO_BASE_URL.*ODOO_API_KEY/)
   })
 })
 
@@ -98,5 +115,18 @@ describe('OdooError', () => {
 
     const emptyMessage = new OdooError({ status: 500, data: { name: 'builtins.AssertionError', message: '' } })
     expect(emptyMessage.message).toBe('Odoo call failed: {"name":"builtins.AssertionError","message":""}')
+  })
+
+  it('keeps at most 500 characters of the answer in the fallback message', () => {
+    const prefix = 'Odoo call failed: '
+    // JSON.stringify wraps a text body in two quotes, so 498 characters of text are exactly 500 of answer.
+    const fits = new OdooError({ status: 502, data: 'x'.repeat(498) })
+    expect(fits.message).toBe(`${prefix}"${'x'.repeat(498)}"`)
+
+    const tooLong = new OdooError({ status: 502, data: 'x'.repeat(499) })
+    expect(tooLong.message).toBe(`${prefix}"${'x'.repeat(498)}…`)
+
+    const longJson = new OdooError({ status: 500, data: { name: 'builtins.Exception', debug: 'y'.repeat(2000) } })
+    expect(longJson.message).toHaveLength(prefix.length + 500)
   })
 })
