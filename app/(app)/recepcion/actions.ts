@@ -9,7 +9,7 @@ import {
 import { ForbiddenError } from '@/lib/auth/guards'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { operarioHasAlmacen } from '@/lib/admin/operarioAlmacenes'
-import { isKnownDuplicate } from '@/lib/cache/trackingActivos'
+import { buscarDuplicado } from '@/lib/cache/trackingActivos'
 import { publishSync } from '@/lib/queue/publish'
 
 /** Loads a session and asserts it belongs to the caller. */
@@ -78,7 +78,7 @@ export async function scanTracking(
   // also violate the (courier_batch_id, tracking_number) unique constraint).
   if (alreadyInSession) return { estado: 'duplicado' }
 
-  const estado = (await isKnownDuplicate(trackingNumber)) ? 'duplicado' : 'ok'
+  const estado = (await buscarDuplicado(trackingNumber)) !== null ? 'duplicado' : 'ok'
   await db.insert(sesionItems).values({ courierBatchId: batchId, trackingNumber, estado }).returning()
   return { estado }
 }

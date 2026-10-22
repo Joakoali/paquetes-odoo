@@ -27,6 +27,12 @@ interface ProjectRead {
   name: string
 }
 
+interface TrackingLineRead {
+  lot_id: Many2one
+  picking_id: Many2one
+  picking_code: string | false
+}
+
 export interface AlmacenOdoo {
   warehouseId: number
   codigo: string
@@ -52,6 +58,16 @@ export interface UsoCourierOdoo {
 export interface BarcoOdoo {
   odooId: number
   nombre: string
+}
+
+/** A tracking number (the name of a serial number) on a move line, and the picking that move line is in. */
+export interface LineaTrackingOdoo {
+  trackingNumber: string
+  pickingId: number
+  /** The picking's name, e.g. `MB92/IN/00198`. */
+  pickingRef: string
+  /** Whether the picking is a reception. The same tracking is also on the delivery that took it out. */
+  esRecepcion: boolean
 }
 
 /** The warehouses, with the reception and delivery operation type of each. */
@@ -101,6 +117,38 @@ export async function fetchUsoCouriers(desde: Date): Promise<UsoCourierOdoo[]> {
     else usos.set(clave, { inTypeId, productId, usos: 1 })
   }
   return [...usos.values()]
+}
+
+/**
+ * One page, in id order, of the move lines that carry a tracking number and have not been
+ * cancelled. A page shorter than `limit` is the last one.
+ *
+ * Move lines that are in no picking (inventory adjustments, scrap) are filtered out by Odoo
+ * itself, with `['picking_id', '!=', false]`: the cache needs a picking to point at. Dropping
+ * them after the read instead would make a page come back shorter than the one Odoo sent, and
+ * the caller would take it for the last page and never read the rest.
+ */
+export async function fetchLineasConTracking(pagina: { offset: number; limit: number }): Promise<LineaTrackingOdoo[]> {
+  const lineas = await odooCall<TrackingLineRead[]>('stock.move.line', 'search_read', {
+    domain: [
+      ['lot_id', '!=', false],
+      ['state', '!=', 'cancel'],
+      ['picking_id', '!=', false],
+    ],
+    fields: ['lot_id', 'picking_id', 'picking_code'],
+    order: 'id',
+    offset: pagina.offset,
+    limit: pagina.limit,
+  })
+  // The domain already rules out a line without lot or picking; the check is for the types.
+  return lineas.flatMap((l) => (l.lot_id && l.picking_id
+    ? [{
+        trackingNumber: l.lot_id[1],
+        pickingId: l.picking_id[0],
+        pickingRef: l.picking_id[1],
+        esRecepcion: l.picking_code === 'incoming',
+      }]
+    : []))
 }
 
 /** Barcos are the projects. */

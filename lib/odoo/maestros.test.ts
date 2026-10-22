@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./client', () => ({ odooCall: vi.fn() }))
 import { odooCall } from './client'
-import { fetchAlmacenes, fetchBarcos, fetchCouriers, fetchUsoCouriers } from './maestros'
+import { fetchAlmacenes, fetchBarcos, fetchCouriers, fetchLineasConTracking, fetchUsoCouriers } from './maestros'
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -97,6 +97,71 @@ describe('fetchUsoCouriers', () => {
   it('returns an empty list when there were no receptions', async () => {
     vi.mocked(odooCall).mockResolvedValue([])
     expect(await fetchUsoCouriers(new Date('2026-07-24T00:00:00Z'))).toEqual([])
+  })
+})
+
+describe('fetchLineasConTracking', () => {
+  it('reads one page of tracking numbers with the picking each one is in', async () => {
+    vi.mocked(odooCall).mockResolvedValue([
+      { lot_id: [501, 'JJD1'], picking_id: [9, 'MB92/IN/00198'], picking_code: 'incoming' },
+      { lot_id: [502, 'XW2'], picking_id: [12, 'MB92/OUT/00045'], picking_code: 'outgoing' },
+    ])
+
+    expect(await fetchLineasConTracking({ offset: 2000, limit: 2000 })).toEqual([
+      { trackingNumber: 'JJD1', pickingId: 9, pickingRef: 'MB92/IN/00198', esRecepcion: true },
+      { trackingNumber: 'XW2', pickingId: 12, pickingRef: 'MB92/OUT/00045', esRecepcion: false },
+    ])
+    expect(odooCall).toHaveBeenCalledTimes(1)
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'search_read', {
+      domain: [
+        ['lot_id', '!=', false],
+        ['state', '!=', 'cancel'],
+        // Lines in no picking are left out by Odoo, so a page is as long as Odoo's page.
+        ['picking_id', '!=', false],
+      ],
+      fields: ['lot_id', 'picking_id', 'picking_code'],
+      order: 'id',
+      offset: 2000,
+      limit: 2000,
+    })
+  })
+
+  it('passes the page it is given to Odoo', async () => {
+    vi.mocked(odooCall).mockResolvedValue([])
+
+    await fetchLineasConTracking({ offset: 0, limit: 50 })
+
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'search_read', expect.objectContaining({ offset: 0, limit: 50 }))
+  })
+
+  it('counts as a reception only a picking of the incoming type', async () => {
+    vi.mocked(odooCall).mockResolvedValue([
+      { lot_id: [1, 'A'], picking_id: [10, 'MB92/IN/00001'], picking_code: 'incoming' },
+      { lot_id: [2, 'B'], picking_id: [11, 'MB92/OUT/00001'], picking_code: 'outgoing' },
+      { lot_id: [3, 'C'], picking_id: [12, 'MB92/INT/00001'], picking_code: 'internal' },
+      { lot_id: [4, 'D'], picking_id: [13, 'MB92/XX/00001'], picking_code: false },
+    ])
+
+    const lineas = await fetchLineasConTracking({ offset: 0, limit: 2000 })
+
+    expect(lineas.map((l) => [l.trackingNumber, l.esRecepcion])).toEqual([
+      ['A', true], ['B', false], ['C', false], ['D', false],
+    ])
+  })
+
+  it('skips a line that has no lot or no picking', async () => {
+    vi.mocked(odooCall).mockResolvedValue([
+      { lot_id: [1, 'A'], picking_id: [10, 'MB92/IN/00001'], picking_code: 'incoming' },
+      { lot_id: false, picking_id: [10, 'MB92/IN/00001'], picking_code: 'incoming' },
+      { lot_id: [3, 'C'], picking_id: false, picking_code: false },
+    ])
+
+    expect((await fetchLineasConTracking({ offset: 0, limit: 2000 })).map((l) => l.trackingNumber)).toEqual(['A'])
+  })
+
+  it('returns an empty list when the page is empty', async () => {
+    vi.mocked(odooCall).mockResolvedValue([])
+    expect(await fetchLineasConTracking({ offset: 4000, limit: 2000 })).toEqual([])
   })
 })
 

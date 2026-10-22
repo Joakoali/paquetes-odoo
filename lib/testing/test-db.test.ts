@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { count, getTableName, is } from 'drizzle-orm'
+import { count, getTableName, is, sql } from 'drizzle-orm'
 import { PgTable } from 'drizzle-orm/pg-core'
 
 // The pattern every DB-backed test follows: the app's `db` becomes an in-memory
@@ -19,6 +19,21 @@ beforeEach(() => resetTestDb(db as unknown as TestDb))
 
 // drizzle wraps the driver error in a DrizzleQueryError; the violated constraint is on `cause`.
 const violating = (constraint: string) => ({ cause: { constraint } })
+
+// Production Neon runs in GMT, but PGlite follows the time zone of the machine it runs on.
+// Left alone, a `now()` stored by Postgres would come back shifted by that machine's offset
+// from the UTC dates drizzle sends and reads, and SQL time comparisons would drift with it.
+describe('createTestDb time zone', () => {
+  it('runs the session in UTC, like production', async () => {
+    const { rows } = await (db as unknown as TestDb).execute(sql`SHOW TIME ZONE`)
+    expect(rows).toEqual([{ TimeZone: 'UTC' }])
+  })
+
+  it('reads a defaultNow() column back as the current time', async () => {
+    const operario = await seedOperario(db) // createdAt is filled by Postgres: defaultNow()
+    expect(Math.abs(operario.createdAt.getTime() - Date.now())).toBeLessThan(5_000)
+  })
+})
 
 describe('partial unique index on open recepciones', () => {
   it('rejects a second open recepción for the same almacén and barco', async () => {

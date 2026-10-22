@@ -19,7 +19,7 @@ vi.mock('../../../lib/admin/operarioAlmacenes', () => ({
   operarioHasAlmacen: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('../../../lib/cache/trackingActivos', () => ({
-  isKnownDuplicate: vi.fn().mockResolvedValue(false),
+  buscarDuplicado: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('../../../lib/queue/publish', () => ({ publishSync: vi.fn() }))
 
@@ -62,7 +62,7 @@ vi.mock('../../../db/schema', () => ({
   sesionesEscaneo: 'sesiones', sesionCourierBatches: 'batches', sesionItems: 'items',
 }))
 
-import { isKnownDuplicate } from '../../../lib/cache/trackingActivos'
+import { buscarDuplicado } from '../../../lib/cache/trackingActivos'
 import { operarioHasAlmacen } from '../../../lib/admin/operarioAlmacenes'
 import { publishSync } from '../../../lib/queue/publish'
 import { startSession, startCourierBatch, scanTracking, finishCourierBatch, confirmSession } from './actions'
@@ -79,7 +79,7 @@ beforeEach(async () => {
   state.batches.length = 0
   state.items.length = 0
   state.nextId = 0
-  vi.mocked(isKnownDuplicate).mockResolvedValue(false)
+  vi.mocked(buscarDuplicado).mockResolvedValue(null)
   vi.mocked(operarioHasAlmacen).mockResolvedValue(true)
   vi.mocked(publishSync).mockClear()
 })
@@ -97,7 +97,7 @@ describe('recepcion actions', () => {
 
   it('scanTracking marks duplicado when cache says so', async () => {
     const { batchId } = await seedSession()
-    vi.mocked(isKnownDuplicate).mockResolvedValue(true)
+    vi.mocked(buscarDuplicado).mockResolvedValue({ odooPickingRef: 'MB92/IN/00198' })
     const result = await scanTracking(batchId, 'T2')
     expect(result.estado).toBe('duplicado')
     expect(state.items).toHaveLength(1)

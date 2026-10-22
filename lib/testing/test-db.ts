@@ -35,9 +35,16 @@ async function batch<T extends PromiseLike<unknown>[]>(queries: [...T]): Promise
  *   vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
  *   import { db } from '@/db/client'
  *   beforeEach(() => resetTestDb(db as unknown as TestDb))
+ *
+ * The session runs in UTC, as production Neon does (`SHOW TIME ZONE` is GMT there). PGlite
+ * would otherwise follow the host's zone: a `now()` / `defaultNow()` stored in a
+ * `timestamp` column would read back shifted by the host's offset from the UTC dates
+ * drizzle sends and reads, and SQL comparisons with those dates would drift.
  */
 export async function createTestDb(): Promise<TestDb> {
-  const db = drizzle(new PGlite(), { schema })
+  const client = new PGlite()
+  await client.exec(`SET TIME ZONE 'UTC'`)
+  const db = drizzle(client, { schema })
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER })
   return Object.assign(db, { batch })
 }
