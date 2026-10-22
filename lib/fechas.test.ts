@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { ZONA_HORARIA, formatFechaOdoo, parseFechaOdoo } from './fechas'
+import { describe, it, expect, afterEach } from 'vitest'
+import { ZONA_HORARIA, formatFechaOdoo, haceCuanto, inicioDeHoy, parseFechaOdoo } from './fechas'
 
 describe('fechas', () => {
   it('names the time zone the warehouses work in', () => {
@@ -24,5 +24,76 @@ describe('fechas', () => {
     expect(() => parseFechaOdoo('ayer')).toThrow(/ayer/)
     expect(() => parseFechaOdoo('2026-09-29')).toThrow()
     expect(() => parseFechaOdoo('2026-13-45 99:99:99')).toThrow()
+  })
+})
+
+describe('inicioDeHoy', () => {
+  const TZ_ORIGINAL = process.env.TZ
+  afterEach(() => {
+    if (TZ_ORIGINAL === undefined) delete process.env.TZ
+    else process.env.TZ = TZ_ORIGINAL
+  })
+
+  it('inicioDeHoy is midnight in Madrid, in summer and in winter', () => {
+    expect(inicioDeHoy(new Date('2026-07-24T10:00:00Z')).toISOString()).toBe('2026-07-23T22:00:00.000Z')
+    expect(inicioDeHoy(new Date('2026-12-02T10:00:00Z')).toISOString()).toBe('2026-12-01T23:00:00.000Z')
+  })
+
+  it('belongs to the Madrid day of the instant, not to its UTC day', () => {
+    // 23:59:59 on the 23rd in Madrid is still the 23rd; one second later it is the 24th.
+    expect(inicioDeHoy(new Date('2026-07-23T21:59:59Z')).toISOString()).toBe('2026-07-22T22:00:00.000Z')
+    expect(inicioDeHoy(new Date('2026-07-23T22:00:00Z')).toISOString()).toBe('2026-07-23T22:00:00.000Z')
+    // 00:30 in Madrid on the 24th is still the 23rd in UTC.
+    expect(inicioDeHoy(new Date('2026-07-23T22:30:00Z')).toISOString()).toBe('2026-07-23T22:00:00.000Z')
+  })
+
+  it('drops the milliseconds of the instant it is given', () => {
+    expect(inicioDeHoy(new Date('2026-12-02T10:11:12.987Z')).toISOString()).toBe('2026-12-01T23:00:00.000Z')
+  })
+
+  // The clocks change at night, so on the day of the change midnight and noon have different offsets:
+  // a midnight computed with the offset of "now" is an hour off. The days after pin the new offset.
+  it.each([
+    ['the day the clocks go forward', '2026-03-29T12:00:00Z', '2026-03-28T23:00:00.000Z'],
+    ['the day after the clocks went forward', '2026-03-30T12:00:00Z', '2026-03-29T22:00:00.000Z'],
+    ['the day the clocks go back', '2026-10-25T12:00:00Z', '2026-10-24T22:00:00.000Z'],
+    ['the day after the clocks went back', '2026-10-26T12:00:00Z', '2026-10-25T23:00:00.000Z'],
+  ])('is right on %s', (_dia, ahora, esperado) => {
+    expect(inicioDeHoy(new Date(ahora)).toISOString()).toBe(esperado)
+  })
+
+  it('does not depend on the time zone of the machine it runs on', () => {
+    // The dev machine is in Spain and Vercel runs in UTC: the answer must be the same in both.
+    process.env.TZ = 'America/Los_Angeles'
+    expect(inicioDeHoy(new Date('2026-07-24T10:00:00Z')).toISOString()).toBe('2026-07-23T22:00:00.000Z')
+    process.env.TZ = 'UTC'
+    expect(inicioDeHoy(new Date('2026-12-02T10:00:00Z')).toISOString()).toBe('2026-12-01T23:00:00.000Z')
+  })
+})
+
+describe('haceCuanto', () => {
+  const AHORA = new Date('2026-10-22T12:00:00Z')
+  const SEG = 1000
+  const MIN = 60 * SEG
+  const HORA = 60 * MIN
+  const DIA = 24 * HORA
+
+  it.each([
+    ['no time at all', 'recién', 0],
+    ['59 seconds', 'recién', 59 * SEG],
+    ['one minute', 'hace 1 min', MIN],
+    ['59 minutes and 59 seconds', 'hace 59 min', 59 * MIN + 59 * SEG],
+    ['one hour', 'hace 1 h', HORA],
+    ['23 hours and 59 minutes', 'hace 23 h', 23 * HORA + 59 * MIN],
+    ['24 hours', 'ayer', DIA],
+    ['47 hours and 59 minutes', 'ayer', 47 * HORA + 59 * MIN],
+    ['48 hours', 'hace 2 días', 2 * DIA],
+    ['ten days and five hours', 'hace 10 días', 10 * DIA + 5 * HORA],
+  ])('%s ago reads "%s"', (_cuanto, esperado, milisegundos) => {
+    expect(haceCuanto(new Date(AHORA.getTime() - milisegundos), AHORA)).toBe(esperado)
+  })
+
+  it('reads a moment slightly ahead of now as recién: the database clock and the app clock never agree exactly', () => {
+    expect(haceCuanto(new Date(AHORA.getTime() + 5 * SEG), AHORA)).toBe('recién')
   })
 })
