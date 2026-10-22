@@ -1,11 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./client', () => ({ odooCall: vi.fn() }))
 import { odooCall } from './client'
+import { ConfiguracionError } from '../errores'
 import { checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking, getPendingOutgoing } from './pickings'
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+afterEach(() => {
+  vi.unstubAllEnvs()
 })
 
 describe('checkDuplicateTrackingNumbers', () => {
@@ -47,6 +52,16 @@ describe('createIncomingPicking', () => {
     process.env.ODOO_FIELD_BARCO = 'x_studio_barco'
     vi.mocked(odooCall).mockResolvedValue(777)
     expect(await createIncomingPicking(7, 33)).toBe(777)
+  })
+
+  it('throws ConfiguracionError without calling Odoo when ODOO_FIELD_BARCO is not set', async () => {
+    vi.stubEnv('ODOO_FIELD_BARCO', undefined)
+
+    const err = await createIncomingPicking(7, 33).catch((e) => e)
+
+    expect(err).toBeInstanceOf(ConfiguracionError)
+    expect(err.message).toBe('ODOO_FIELD_BARCO no está configurado')
+    expect(odooCall).not.toHaveBeenCalled()
   })
 })
 
@@ -105,5 +120,15 @@ describe('getPendingOutgoing', () => {
 
     expect(result).toEqual([{ id: 700, name: 'MB92/OUT/00069', trackingNumbers: ['T1', 'T2'] }])
     expect(odooCall).toHaveBeenCalledTimes(2)
+  })
+
+  it('throws ConfiguracionError without calling Odoo when ODOO_FIELD_BARCO is not set', async () => {
+    vi.stubEnv('ODOO_FIELD_BARCO', undefined)
+
+    const err = await getPendingOutgoing(7, 33).catch((e) => e)
+
+    expect(err).toBeInstanceOf(ConfiguracionError)
+    expect(err.message).toBe('ODOO_FIELD_BARCO no está configurado')
+    expect(odooCall).not.toHaveBeenCalled()
   })
 })

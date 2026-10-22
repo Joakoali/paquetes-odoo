@@ -1,6 +1,30 @@
+/** Past this Odoo is down or overloaded, and a hung call would hold the whole queue. */
+export const ODOO_TIMEOUT_MS = 30_000
+
+/** `key` of an Odoo answer body when it is a non-empty string, else null. */
+function textField(data: unknown, key: 'name' | 'message'): string | null {
+  if (typeof data !== 'object' || data === null) return null
+  const value = (data as Record<string, unknown>)[key]
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/**
+ * A non-2xx answer from Odoo, or a 2xx whose body is not JSON. `data` is what
+ * came back: the parsed JSON, the raw text when it was not JSON (a proxy error
+ * page), or null for an empty body. `odooName` is the exception Odoo reports
+ * (`odoo.exceptions.UserError`, …); it is only there when Odoo itself answered,
+ * which is how a rejected request is told apart from a gateway error.
+ */
 export class OdooError extends Error {
-  constructor(public data: unknown) {
-    super(`Odoo call failed: ${JSON.stringify(data)}`)
+  readonly status: number
+  readonly odooName: string | null
+  readonly data: unknown
+
+  constructor(info: { status: number; data: unknown }) {
+    super(textField(info.data, 'message') ?? `Odoo call failed: ${JSON.stringify(info.data)}`)
+    this.status = info.status
+    this.odooName = textField(info.data, 'name')
+    this.data = info.data
   }
 }
 
@@ -28,7 +52,9 @@ async function throttle(): Promise<void> {
  * parameters (`domain`, `fields`, `vals_list`, `vals`, …) plus optionally
  * `ids` (the recordset the method runs on) and `context`. The response is the
  * raw result — no `{ "result": … }` envelope. Errors come back with a non-2xx
- * status and an `{ name, message, arguments, … }` body.
+ * status and an `{ name, message, arguments, … }` body, thrown as `OdooError`.
+ * A call that gets no answer within `ODOO_TIMEOUT_MS` is aborted and rejects
+ * with the `TimeoutError` that `fetch` raises, not with an `OdooError`.
  *
  * NOT the classic JSON-RPC `{ args, kwargs }` shape — that returns 422
  * "missing a required argument" against this instance.
@@ -54,6 +80,8 @@ export async function odooCall<T>(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(params),
+    // Built here, after throttle(): waiting for the 1 req/s slot must not eat into it.
+    signal: AbortSignal.timeout(ODOO_TIMEOUT_MS),
   })
 
   const text = await response.text()
@@ -62,9 +90,9 @@ export async function odooCall<T>(
     try {
       body = JSON.parse(text)
     } catch {
-      throw new OdooError({ status: response.status, body: text })
+      throw new OdooError({ status: response.status, data: text })
     }
   }
-  if (!response.ok) throw new OdooError(body ?? { status: response.status })
+  if (!response.ok) throw new OdooError({ status: response.status, data: body })
   return body as T
 }

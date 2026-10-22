@@ -1,4 +1,5 @@
 import { odooCall } from './client'
+import { ConfiguracionError } from '../errores'
 
 interface MoveLineLotRead {
   lot_id: [number, string] | false
@@ -24,7 +25,7 @@ export async function checkDuplicateTrackingNumbers(trackingNumbers: string[]): 
 
 export async function createIncomingPicking(almacenPickingTypeId: number, barcoOdooId: number): Promise<number> {
   const barcoField = process.env.ODOO_FIELD_BARCO
-  if (!barcoField) throw new Error('ODOO_FIELD_BARCO is not set')
+  if (!barcoField) throw new ConfiguracionError('ODOO_FIELD_BARCO no está configurado')
 
   const res = await odooCall<number | number[]>('stock.picking', 'create', {
     vals_list: [{
@@ -94,7 +95,7 @@ interface PickingRead {
 
 export async function getPendingOutgoing(almacenPickingTypeId: number, barcoOdooId: number): Promise<PendingDelivery[]> {
   const barcoField = process.env.ODOO_FIELD_BARCO
-  if (!barcoField) throw new Error('ODOO_FIELD_BARCO is not set')
+  if (!barcoField) throw new ConfiguracionError('ODOO_FIELD_BARCO no está configurado')
 
   const pickings = await odooCall<PickingRead[]>('stock.picking', 'search_read', {
     domain: [
