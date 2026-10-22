@@ -1,98 +1,129 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const links: Array<{ operarioId: string; almacenId: number }> = []
-const almacenRows = [
-  { id: 1, prefijo: 'MB92', nombre: 'Barcelona', odooInTypeId: null },
-  { id: 2, prefijo: 'MAD1', nombre: 'Madrid', odooInTypeId: null },
-]
+vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
 
-vi.mock('../../db/client', () => {
-  // Drizzle statements are lazy: they run when awaited, or when db.batch()
-  // executes them in order. The neon-http driver has NO transaction() — it
-  // throws — so the mock deliberately does not provide one.
-  const statement = (run: () => void) => {
-    let done = false
-    const exec = () => { if (!done) { done = true; run() } }
-    return {
-      exec,
-      then: (onFulfilled: any, onRejected: any) => {
-        exec()
-        return Promise.resolve().then(onFulfilled, onRejected)
-      },
-    }
-  }
+import { eq } from 'drizzle-orm'
+import { db } from '@/db/client'
+import { almacenes, operarioAlmacenes, type Almacen, type Operario } from '@/db/schema'
+import { seedAlmacen, seedOperario } from '@/lib/testing/seed'
+import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
+import { getAlmacenesForOperario, operarioHasAlmacen, setAlmacenesForOperario } from './operarioAlmacenes'
 
-  return {
-    db: {
-      delete: () => ({
-        // Remove ALL matching rows. In real Drizzle, delete().where() removes all matches.
-        // Test controls which rows exist; here we clear all since test only uses one operario.
-        where: () => statement(() => { links.length = 0 }),
-      }),
-      insert: () => ({ values: (rows: any[]) => statement(() => { links.push(...rows) }) }),
-      batch: async (statements: any[]) => { for (const s of statements) s.exec() },
-      query: {
-        operarioAlmacenes: {
-          // Test controls the links array; mock ignores where-expression entirely
-          findMany: async () => links,
-          findFirst: async ({ where }: any) => links.find((l) => where(l, {
-            eq: (a: any, b: any) => a === b,
-            and: (...c: boolean[]) => c.every(Boolean),
-          })),
-        },
-      },
-      select: () => ({
-        from: () => ({
-          where: async () => {
-            // Filter almacenRows to only those with IDs in current links array
-            const almacenIdsInUse = new Set(links.map((l) => l.almacenId))
-            return almacenRows.filter((a) => almacenIdsInUse.has(a.id))
-          },
-        }),
-      }),
-    },
-  }
+let operario: Operario
+let otro: Operario
+// Created out of alphabetical order, so that sorting by name shows.
+let madrid: Almacen
+let barcelona: Almacen
+let valencia: Almacen
+
+beforeEach(async () => {
+  await resetTestDb(db as unknown as TestDb)
+  operario = await seedOperario(db)
+  otro = await seedOperario(db)
+  madrid = await seedAlmacen(db, { prefijo: 'MAD1', nombre: 'Madrid', odooWarehouseId: 1 })
+  barcelona = await seedAlmacen(db, { prefijo: 'MB92', nombre: 'Barcelona', odooWarehouseId: 2 })
+  valencia = await seedAlmacen(db, { prefijo: 'VLC1', nombre: 'Valencia', odooWarehouseId: 3 })
 })
 
-import { getAlmacenesForOperario, setAlmacenesForOperario, operarioHasAlmacen } from './operarioAlmacenes'
+const enlaces = (quien: Operario) =>
+  db.select({ almacenId: operarioAlmacenes.almacenId }).from(operarioAlmacenes)
+    .where(eq(operarioAlmacenes.operarioId, quien.id))
+    .then((filas) => filas.map((f) => f.almacenId).sort((a, b) => a - b))
 
-beforeEach(() => { links.length = 0 })
+const desactivar = (almacen: Almacen) =>
+  db.update(almacenes).set({ activo: false }).where(eq(almacenes.id, almacen.id))
 
 describe('operario almacenes', () => {
   it('replaces the set of assigned almacenes', async () => {
-    await setAlmacenesForOperario('op-1', [1])
-    expect(links).toEqual([{ operarioId: 'op-1', almacenId: 1 }])
-    const result = await getAlmacenesForOperario('op-1')
-    expect(result).toEqual([almacenRows[0]])
+    await setAlmacenesForOperario(operario.id, [madrid.id])
+
+    expect(await enlaces(operario)).toEqual([madrid.id])
+    expect(await getAlmacenesForOperario(operario.id)).toEqual([madrid])
   })
 
   it('replaces previous assignments when called again', async () => {
-    // First assignment: [1, 2]
-    await setAlmacenesForOperario('op-1', [1, 2])
-    expect(links).toEqual([
-      { operarioId: 'op-1', almacenId: 1 },
-      { operarioId: 'op-1', almacenId: 2 },
-    ])
+    await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+    expect(await enlaces(operario)).toEqual([madrid.id, barcelona.id])
 
-    // Replace with: [2]
-    await setAlmacenesForOperario('op-1', [2])
-    expect(links).toEqual([{ operarioId: 'op-1', almacenId: 2 }])
+    await setAlmacenesForOperario(operario.id, [barcelona.id])
 
-    // Verify retrieval returns only almacen 2
-    const result = await getAlmacenesForOperario('op-1')
-    expect(result).toEqual([almacenRows[1]])
+    expect(await enlaces(operario)).toEqual([barcelona.id])
+    expect(await getAlmacenesForOperario(operario.id)).toEqual([barcelona])
   })
 
   it('clears every assignment when given an empty list', async () => {
-    await setAlmacenesForOperario('op-1', [1, 2])
-    await setAlmacenesForOperario('op-1', [])
-    expect(links).toEqual([])
+    await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+
+    await setAlmacenesForOperario(operario.id, [])
+
+    expect(await enlaces(operario)).toEqual([])
+    expect(await getAlmacenesForOperario(operario.id)).toEqual([])
   })
 
-  it('operarioHasAlmacen is true only for an assigned almacen', async () => {
-    await setAlmacenesForOperario('op-1', [1])
-    expect(await operarioHasAlmacen('op-1', 1)).toBe(true)
-    expect(await operarioHasAlmacen('op-1', 2)).toBe(false)
-    expect(await operarioHasAlmacen('op-2', 1)).toBe(false)
+  it('does not touch the assignments of other operarios', async () => {
+    await setAlmacenesForOperario(otro.id, [valencia.id])
+
+    await setAlmacenesForOperario(operario.id, [madrid.id])
+    await setAlmacenesForOperario(operario.id, [])
+
+    expect(await enlaces(otro)).toEqual([valencia.id])
+  })
+
+  it('operarioHasAlmacen is true only for an assigned almacén', async () => {
+    await setAlmacenesForOperario(operario.id, [madrid.id])
+    await setAlmacenesForOperario(otro.id, [barcelona.id])
+
+    expect(await operarioHasAlmacen(operario.id, madrid.id)).toBe(true)
+    expect(await operarioHasAlmacen(operario.id, barcelona.id)).toBe(false)
+    expect(await operarioHasAlmacen(otro.id, madrid.id)).toBe(false)
+  })
+
+  describe('getAlmacenesForOperario', () => {
+    it('gives back only the almacenes of that operario', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id])
+      await setAlmacenesForOperario(otro.id, [barcelona.id, valencia.id])
+
+      expect(await getAlmacenesForOperario(operario.id)).toEqual([madrid])
+    })
+
+    it('gives back only almacenes that are still active', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      await desactivar(barcelona)
+
+      expect(await getAlmacenesForOperario(operario.id)).toEqual([madrid])
+    })
+
+    it('gives back nothing for an operario whose almacenes are all inactive, or who has none', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id])
+      await desactivar(madrid)
+
+      expect(await getAlmacenesForOperario(operario.id)).toEqual([])
+      expect(await getAlmacenesForOperario(otro.id)).toEqual([])
+    })
+
+    it('lists them by name, whichever order they were created or assigned in', async () => {
+      await setAlmacenesForOperario(operario.id, [valencia.id, madrid.id, barcelona.id])
+
+      expect((await getAlmacenesForOperario(operario.id)).map((a) => a.nombre)).toEqual(['Barcelona', 'Madrid', 'Valencia'])
+    })
+
+    it('sorts the names without caring about capitals', async () => {
+      const minuscula = await seedAlmacen(db, { prefijo: 'ALC1', nombre: 'alicante', odooWarehouseId: 4 })
+      await setAlmacenesForOperario(operario.id, [madrid.id, minuscula.id, barcelona.id])
+
+      // Under the C collation "alicante" would come after every name that starts with a capital.
+      expect((await getAlmacenesForOperario(operario.id)).map((a) => a.id))
+        .toEqual([minuscula.id, barcelona.id, madrid.id])
+    })
+
+    it('puts two almacenes with the same name in the order of their ids, whatever order the database finds them in', async () => {
+      const gemelaDeMadrid = await seedAlmacen(db, { prefijo: 'MAD2', nombre: 'Madrid', odooWarehouseId: 4 })
+      // Rewriting Madrid moves its row after its twin's, and it is assigned last: without a tie-break the
+      // database has every reason to answer the twin first, which is the opposite of the order of the ids.
+      await db.update(almacenes).set({ activo: true }).where(eq(almacenes.id, madrid.id))
+      await setAlmacenesForOperario(operario.id, [gemelaDeMadrid.id, madrid.id])
+
+      expect((await getAlmacenesForOperario(operario.id)).map((a) => a.id)).toEqual([madrid.id, gemelaDeMadrid.id])
+    })
   })
 })
