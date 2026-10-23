@@ -23,6 +23,11 @@ function textoDelError(error: unknown): string {
  * retried as many times as it was told to (`MAX_REINTENTOS`): then the session moves to
  * `error`, which is what puts it in Pendientes. If it is not final the state stays as it
  * was and the session keeps waiting for the next delivery.
+ *
+ * A final failure also clears the review of the session. Somebody may have marked the send
+ * as reviewed while it looked stuck, and that made it disappear from Pendientes; the failure
+ * is a new problem that nobody has seen, and without this it would stay out of sight. A
+ * failure that is not final leaves the review alone: the send is still just waiting.
  */
 export async function registrarFalloSync(entrada: {
   sesionId: string
@@ -39,7 +44,7 @@ export async function registrarFalloSync(entrada: {
       intentos: sql`${sesionesEscaneo.intentos} + 1`,
       ultimoError: mensaje,
       ultimoErrorTipo: tipo,
-      ...(final ? { estado: 'error' as const } : {}),
+      ...(final ? { estado: 'error' as const, revisadoAt: null, revisadoPor: null } : {}),
     })
     .where(eq(sesionesEscaneo.id, entrada.sesionId))
 

@@ -147,6 +147,62 @@ describe('registrarFalloSync', () => {
     })
   })
 
+  // Somebody can mark a send that looks stuck as reviewed in Pendientes, and it then stops being listed. If it
+  // later fails for good that is a new problem which nobody has seen, and it has to be listed again.
+  describe('a session somebody marked as reviewed', () => {
+    const REVISADA = { revisadoAt: new Date('2026-10-23T10:00:00.000Z') }
+
+    const FINALES: Array<[caso: string, error: unknown, reintentosHechos: number]> = [
+      ['a configuration error', new ConfiguracionError('Falta ODOO_FIELD_RECIBIDO_POR'), 0],
+      ['an Odoo rejection', new OdooError({ status: 422, data: { name: 'odoo.exceptions.ValidationError', message: 'x' } }), 0],
+      ['a connection failure that used up its retries', new TypeError('fetch failed'), 2],
+    ]
+    it.each(FINALES)('is not reviewed any more after %s, which is final', async (_caso, error, reintentosHechos) => {
+      const s = await seedSesion({ ...REVISADA, revisadoPor: operario.id })
+
+      const r = await registrarFalloSync({ sesionId: s.id, error, reintentosHechos })
+
+      expect(r.final).toBe(true)
+      expect(await estadoDe(s.id)).toMatchObject({ estado: 'error', revisadoAt: null, revisadoPor: null })
+    })
+
+    it.each([0, 1])('stays reviewed after a failure that is not final (reintentosHechos %i)', async (reintentosHechos) => {
+      const s = await seedSesion({ ...REVISADA, revisadoPor: operario.id })
+
+      const r = await registrarFalloSync({ sesionId: s.id, error: new TypeError('fetch failed'), reintentosHechos })
+
+      expect(r.final).toBe(false)
+      expect(await estadoDe(s.id)).toMatchObject({
+        estado: 'confirmada_pendiente_sync', intentos: 1, ...REVISADA, revisadoPor: operario.id,
+      })
+    })
+
+    it('leaves the review of every other session alone', async () => {
+      const fallida = await seedSesion({ ...REVISADA, revisadoPor: operario.id })
+      const otra = await seedSesion({ ...REVISADA, revisadoPor: operario.id, estado: 'error', barcoOdooId: 674 })
+
+      await registrarFalloSync({ sesionId: fallida.id, error: new Error('x'), reintentosHechos: 0 })
+
+      expect(await estadoDe(otra.id)).toMatchObject({ ...REVISADA, revisadoPor: operario.id })
+    })
+
+    it('still gets its error recorded, as for any other session', async () => {
+      const s = await seedSesion({ ...REVISADA, revisadoPor: operario.id })
+
+      await registrarFalloSync({ sesionId: s.id, error: new ConfiguracionError('Falta X'), reintentosHechos: 0 })
+
+      expect(await estadoDe(s.id)).toMatchObject({ intentos: 1, ultimoError: 'Falta X', ultimoErrorTipo: 'configuracion' })
+    })
+  })
+
+  it('has nothing to clear on a session that was never reviewed', async () => {
+    const s = await seedSesion()
+
+    await registrarFalloSync({ sesionId: s.id, error: new Error('x'), reintentosHechos: 0 })
+
+    expect(await estadoDe(s.id)).toMatchObject({ estado: 'error', revisadoAt: null, revisadoPor: null })
+  })
+
   it('audits every failure as sync_error, with no operario, saying whether it was final', async () => {
     const s = await seedSesion()
 
