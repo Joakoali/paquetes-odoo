@@ -84,17 +84,20 @@ const PREFIJO_DATA_URL = /^data:[^,]*;base64,/i
  * Registers the delivery the crew confirmed and queues it: the worker is the only one that writes it to Odoo.
  *
  * Idempotent by `id`. The phone makes the id up before its first try, so a second try with it (the connection
- * dropped and the answer never came) finds the entrega already saved and does nothing: it is not queued or
- * audited a second time.
+ * dropped and the answer never came) finds the entrega already saved: it is not saved or audited a second time.
+ * If that entrega is still waiting for its sync, the retry queues it again. The first try may have saved it and
+ * failed to queue it (QStash down), and answering "registered" with nothing queued would hide that. A second
+ * message does no harm: the queue runs one job at a time, and the worker does nothing for an entrega that is not
+ * waiting for its sync any more. One that is not (synced, or failed for good, which goes back through
+ * Pendientes' "Reintentar") is left alone, and so is an id that belongs to something other than an entrega.
  *
  * It is saved straight as `confirmada_pendiente_sync`: an entrega has no earlier stage, since what the phone
  * sends is what the crew confirmed. The name is trimmed, and the signature is stored as bare base64, which is
  * what Odoo takes.
  *
- * If queuing fails the error goes through and the entrega stays saved. A try repeated with the same id will
- * not queue it (it is there already), so what gets it moving is Pendientes: it lists it as stuck after a
- * while and queues it again with "Reintentar". It is not deleted on failure because a repeated try may have
- * found it meanwhile and answered that it was registered.
+ * If queuing fails, in either try, the error goes through and the entrega stays as it is. It is not deleted: a
+ * repeated try may have found it meanwhile. A retry with the same id queues it; if nobody retries, Pendientes
+ * lists it as stuck after a while.
  */
 export async function registrarEntrega(entrada: {
   id: string
@@ -124,8 +127,17 @@ export async function registrarEntrega(entrada: {
     })
     .onConflictDoNothing()
     .returning({ id: sesionesEscaneo.id })
-  // Already registered by an earlier try: it was queued then, and it is not queued twice.
-  if (!creada) return
+
+  if (!creada) {
+    // An earlier try saved it, and audited it if it got that far: no audit here. It is queued again only if it is
+    // still waiting for its sync, which is also true when the first try did queue it and the worker has not got to it.
+    const existente = await db.query.sesionesEscaneo.findFirst({
+      columns: { estado: true },
+      where: and(eq(sesionesEscaneo.id, id), eq(sesionesEscaneo.tipo, 'entrega')),
+    })
+    if (existente?.estado === 'confirmada_pendiente_sync') await publishSync({ sesionId: id })
+    return
+  }
 
   await publishSync({ sesionId: id })
 

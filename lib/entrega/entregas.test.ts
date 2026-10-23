@@ -163,10 +163,12 @@ function entradaDeEntrega(datos: Partial<Parameters<typeof registrarEntrega>[0]>
 }
 
 describe('registrarEntrega', () => {
-  it('is idempotent by id: a retry after a dropped connection publishes once', async () => {
+  it('is idempotent by id: a retry after a dropped connection publishes once, once the worker has synced it', async () => {
     const entrada = entradaDeEntrega()
 
     await registrarEntrega(entrada)
+    // The first try went through and only the answer was lost: by the time the retry arrives, the worker is done.
+    await db.update(sesionesEscaneo).set({ estado: 'sincronizada', syncedAt: new Date() }).where(eq(sesionesEscaneo.id, entrada.id))
     await registrarEntrega(entrada)
 
     expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
@@ -174,14 +176,90 @@ describe('registrarEntrega', () => {
     expect(registrarAuditoria).toHaveBeenCalledTimes(1)
   })
 
-  it('publishes once when the same entrega reaches the server twice at the same time', async () => {
+  it('queues it again, and audits nothing again, when a retry finds it still waiting for its sync', async () => {
+    const entrada = entradaDeEntrega()
+
+    await registrarEntrega(entrada)
+    await registrarEntrega(entrada)
+
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
+    // A second message does no harm: the queue runs one job at a time, and the worker does nothing for an entrega
+    // that is not waiting for its sync any more.
+    expect(publishSync).toHaveBeenCalledTimes(2)
+    expect(publishSync).toHaveBeenNthCalledWith(1, { sesionId: entrada.id })
+    expect(publishSync).toHaveBeenNthCalledWith(2, { sesionId: entrada.id })
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+  })
+
+  it('queues it on a retry with the same id when the first publish failed', async () => {
+    vi.mocked(publishSync).mockRejectedValueOnce(new Error('QStash no responde'))
+    const entrada = entradaDeEntrega()
+
+    await expect(registrarEntrega(entrada)).rejects.toThrow('QStash no responde')
+    expect(await filaSesion(entrada.id)).toMatchObject({ estado: 'confirmada_pendiente_sync' })
+
+    await registrarEntrega(entrada) // publishing works again
+
+    expect(publishSync).toHaveBeenCalledTimes(2)
+    expect(publishSync).toHaveBeenLastCalledWith({ sesionId: entrada.id })
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
+    // At most once, never twice: the first try failed before auditing, and a retry audits nothing.
+    expect(vi.mocked(registrarAuditoria).mock.calls.length).toBeLessThanOrEqual(1)
+  })
+
+  it('fails the same way on a retry while publishing keeps failing, with the entrega still saved once', async () => {
+    vi.mocked(publishSync).mockRejectedValue(new Error('QStash no responde'))
+    const entrada = entradaDeEntrega()
+
+    await expect(registrarEntrega(entrada)).rejects.toThrow('QStash no responde')
+    await expect(registrarEntrega(entrada)).rejects.toThrow('QStash no responde')
+
+    expect(publishSync).toHaveBeenCalledTimes(2)
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
+    expect(await filaSesion(entrada.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', receptorNombre: 'Capitán Pérez' })
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it.each(['error', 'en_curso'] as const)('does not queue a retry for an entrega that is %s', async (estado) => {
+    const entrada = entradaDeEntrega()
+    await registrarEntrega(entrada)
+    // Only a waiting entrega is queued again: one that failed for good goes back through Pendientes' "Reintentar".
+    await db.update(sesionesEscaneo).set({ estado }).where(eq(sesionesEscaneo.id, entrada.id))
+
+    await registrarEntrega(entrada)
+
+    expect(publishSync).toHaveBeenCalledTimes(1) // the first try's
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+    expect((await filaSesion(entrada.id)).estado).toBe(estado)
+  })
+
+  it('leaves alone an id that belongs to something other than an entrega: nothing is saved or queued', async () => {
+    const [recepcion] = await db.insert(sesionesEscaneo).values({
+      operarioId: veronika.id,
+      almacenId: mb92.id,
+      barcoOdooId: 673,
+      tipo: 'recepcion',
+      estado: 'confirmada_pendiente_sync',
+      confirmedAt: new Date(),
+    }).returning()
+
+    await registrarEntrega(entradaDeEntrega({ id: recepcion.id }))
+
+    expect(publishSync).not.toHaveBeenCalled()
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
+    expect(await filaSesion(recepcion.id)).toMatchObject({ tipo: 'recepcion', receptorNombre: null, odooPickingIds: null })
+  })
+
+  it('saves and audits once when the same entrega reaches the server twice at the same time', async () => {
     const entrada = entradaDeEntrega()
 
     await Promise.all([registrarEntrega(entrada), registrarEntrega(entrada)])
 
     expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
-    expect(publishSync).toHaveBeenCalledTimes(1)
     expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+    // One of the two saved it. The other found it waiting and queued it again, which does no harm.
+    expect(publishSync).toHaveBeenCalledTimes(2)
   })
 
   it('registers each id as an entrega of its own', async () => {
@@ -258,7 +336,7 @@ describe('registrarEntrega', () => {
     })
   })
 
-  it('lets the error through when publishing fails, and keeps the entrega (Pendientes lists it as stuck)', async () => {
+  it('lets the error through when publishing fails, and keeps the entrega', async () => {
     vi.mocked(publishSync).mockRejectedValue(new Error('QStash no responde'))
     const entrada = entradaDeEntrega()
 
