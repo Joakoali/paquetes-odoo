@@ -315,7 +315,7 @@ details[open] > summary::before {
   margin-top: 0.75rem;
 }
 
-/* Rows with a line between them. The rows are the children of the list, or the ones inside its <li>. */
+/* Rows with a line between them: drawn on every child of the list but the first (the rows, or the <li> that hold them). */
 .list {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -546,7 +546,7 @@ details[open] > summary::before {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Not only the color: heavier, and a line on top. */
+/* On a phone, not only the color: heavier, and a line on top. */
 .shell-tab[aria-current="page"] {
   box-shadow: inset 0 3px 0 var(--text);
   color: var(--text);
@@ -681,10 +681,12 @@ details[open] > summary::before {
     font-size: 1rem;
   }
 
+  /* The dark pill says it. The weight stays, so that the tabs do not change width (and move) from one page to the next. */
   .shell-tab[aria-current="page"] {
     background: var(--text);
     box-shadow: none;
     color: #ffffff;
+    font-weight: 600;
   }
 
   .shell-tab-badge {
