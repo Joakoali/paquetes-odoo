@@ -1,10 +1,4 @@
-// app/(app)/entrega/page.tsx
-import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
-import { getAlmacenesForOperario } from '@/lib/admin/operarioAlmacenes'
-import { EntregaClient } from './EntregaClient'
-
-export default async function EntregaPage() {
-  const operario = await requireOperarioFromCookies()
-  const almacenes = await getAlmacenesForOperario(operario.id)
-  return <EntregaClient almacenes={almacenes} />
+// Provisional: Task 15 rebuilds the delivery screens. The layout of (app) already sends whoever has no session to /login.
+export default function EntregaPage() {
+  return <h1>Entrega</h1>
 }
