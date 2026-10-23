@@ -43,7 +43,7 @@ function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
         </ul>
       ) : null}
 
-      <div>
+      <div className="actions">
         {tipo === 'duplicado' ? null : (
           <AccionProblema accion={reintentarAction} sesionId={sesionId} className="btn btn-primary">
             Reintentar

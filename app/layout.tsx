@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -15,6 +15,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Paquetería",
   description: "Captura y validación de recepciones y entregas de paquetería",
+};
+
+// The color of the browser bar on a phone, and of the status bar once the app is on the home screen.
+export const viewport: Viewport = {
+  themeColor: "#1d1d1f",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

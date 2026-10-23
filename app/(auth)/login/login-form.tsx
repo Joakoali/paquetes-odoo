@@ -3,35 +3,51 @@
 import { useActionState } from 'react'
 import { login } from './actions'
 
-type LoginState = { error: string } | null
+// `usuario` is what was typed: React empties the fields of a form when its action ends, even when the action
+// answered with an error, so the field is filled again from here. The password is left empty on purpose.
+type LoginState = { error: string; usuario: string } | null
 
 export function LoginForm() {
   const [state, formAction, pending] = useActionState(
     async (_prev: LoginState, formData: FormData): Promise<LoginState> => {
       const result = await login(formData)
-      return result ?? null
+      return result ? { ...result, usuario: String(formData.get('login') ?? '') } : null
     },
     null,
   )
 
   return (
-    <form
-      action={formAction}
-      style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320, margin: '4rem auto' }}
-    >
-      <h1>Ingresar</h1>
-      <input name="login" placeholder="Usuario" required autoFocus autoComplete="username" />
-      <input
-        name="password"
-        type="password"
-        placeholder="Contraseña"
-        required
-        autoComplete="current-password"
-      />
-      <button type="submit" disabled={pending}>
+    <form action={formAction} className="login-form">
+      <div className="login-field">
+        <label htmlFor="login" className="label">Usuario</label>
+        <input
+          id="login"
+          name="login"
+          className="input"
+          defaultValue={state?.usuario}
+          required
+          autoFocus
+          autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      </div>
+      <div className="login-field">
+        <label htmlFor="password" className="label">Contraseña</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          className="input"
+          required
+          autoComplete="current-password"
+        />
+      </div>
+      <button type="submit" className="btn btn-primary" disabled={pending}>
         {pending ? 'Entrando…' : 'Entrar'}
       </button>
-      {state?.error ? <p role="alert" style={{ color: 'crimson' }}>{state.error}</p> : null}
+      {state?.error ? <p role="alert" className="banner banner-error">{state.error}</p> : null}
     </form>
   )
 }

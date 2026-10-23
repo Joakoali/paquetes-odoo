@@ -1,40 +1,114 @@
+/*
+ * The look of the app, taken from the approved mockups (docs/superpowers/specs/mockups): light background and high
+ * contrast, buttons and rows big enough for a finger, green for the main action and for what went well, red for
+ * errors and duplicates, amber for what is in progress. Light theme only.
+ *
+ * Order: tokens, base, shared classes, the shell of the app (components/app-shell.tsx and the ones it uses), login.
+ */
+
+/* ------------------------------------------------------------------ Tokens */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --text: #1d1d1f;
+  --text-2: #6e6e73;
+  --text-3: #8e8e93;
+  --border: #e5e5ea;
+  --border-strong: #c7c7cc;
+  --primary: #0a7d32;
+  --ok-bg: #e3f6e8;
+  --ok-text: #0a5c26;
+  --danger: #a1170f;
+  --danger-bg: #fdeceb;
+  --warn: #b25f00;
+  --warn-bg: #fff4e0;
+  --focus: #0a5bd3;
+  --radius: 12px;
+  /* The smallest size of anything that is touched. */
+  --tap: 48px;
+
+  /* Also in the mockups, without a name in the list above. */
+  --surface-2: #f2f2f7; /* courier tags, summaries, pressed rows */
+  --chrome: #fafafa; /* top bar and bottom tab bar */
+  --focus-ring: rgba(10, 91, 211, 0.12);
+
+  /* The fonts are loaded by app/layout.tsx; the rest is what shows while they load, or if they do not. */
+  --font-sans: var(--font-geist-sans, system-ui), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono, ui-monospace), ui-monospace, Consolas, monospace;
+
+  /* Height of the tab bar when it is at the bottom (phones). */
+  --tabbar-h: 3.5rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* -------------------------------------------------------------------- Base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 html {
-  height: 100%;
-}
-
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
-  min-height: 100%;
-  display: flex;
-  flex-direction: column;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-* {
-  box-sizing: border-box;
-  padding: 0;
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd,
+figure,
+blockquote {
   margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+h1 {
+  font-size: 1.5rem;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 1.125rem;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+h3 {
+  font-size: 1rem;
+  line-height: 1.3;
+  font-weight: 700;
 }
 
 a {
@@ -42,8 +116,617 @@ a {
   text-decoration: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+select,
+textarea,
+input:not([type="checkbox"], [type="radio"]) {
+  margin: 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+}
+
+a,
+button,
+input,
+select,
+summary,
+label {
+  touch-action: manipulation;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* "Ver detalle" and the like: it is touched, so it has the size of anything that is touched. */
+summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+  color: var(--focus);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary::before {
+  content: "\25B8";
+  font-size: 0.9em;
+}
+
+details[open] > summary::before {
+  content: "\25BE";
+}
+
+/* ---------------------------------------------------------- Shared classes */
+
+/*
+ * The container of a screen. A bare <main> (the admin screens, until they are redone) gets the same, with no weight
+ * (:where), so that any class can still change it.
+ */
+:where(main),
+.page {
+  display: block;
+  width: 100%;
+  max-width: 60rem;
+  margin-inline: auto;
+  padding: 1rem;
+}
+
+:where(main) > * + *,
+.page > * + * {
+  margin-top: 1rem;
+}
+
+/* Buttons. A bare .btn looks like .btn-secondary. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 1.25rem;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.btn-secondary {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.btn-primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.btn:active:not(:disabled) {
+  filter: brightness(0.93);
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Text only, in the color of a link ("‹ Recepciones", "Borrar", "Cerrar sesión"). Works alone or next to .btn. */
+.btn-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--focus);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+}
+
+.btn-link:active:not(:disabled) {
+  opacity: 0.6;
+}
+
+.btn-link:disabled,
+.btn-link[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A choice that stays chosen: a courier. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 1rem;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--text);
+  background: var(--text);
+  color: #ffffff;
+}
+
+.chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card > * + * {
+  margin-top: 0.5rem;
+}
+
+.card + .card {
+  margin-top: 0.75rem;
+}
+
+/* Rows with a line between them. The rows are the children of the list, or the ones inside its <li>. */
+.list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: var(--tap);
+  padding: 0.625rem 0.875rem;
+}
+
+/* A row that goes somewhere. :where keeps these as light as .list-row, so the line below can come after them. */
+:where(a, button).list-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+:where(a, button).list-row:active {
+  background: var(--surface-2);
+}
+
+.list > * + * {
+  border-top: 1px solid var(--border);
+}
+
+/* A message for the operario. A bare .banner is neutral. */
+.banner {
+  padding: 0.625rem 0.875rem;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.banner-ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.banner-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.banner-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.label {
+  display: block;
+  color: var(--text-2);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.label + .input {
+  margin-top: 0.375rem;
+}
+
+/* 16px or more: below that, iOS zooms into the field when it is touched. */
+.input {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.625rem 0.875rem;
+  border: 2px solid var(--text);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.input::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+.input:focus {
+  border-color: var(--focus);
+  outline: 2px solid transparent;
+  box-shadow: 0 0 0 1px var(--focus), 0 0 0 4px var(--focus-ring);
+}
+
+.input:disabled {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+/* Tracking numbers and references. They are long: they break instead of widening the screen. */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.badge + .badge {
+  margin-left: 0.375rem;
+}
+
+/*
+ * A row of buttons. What a button answers (a .banner after it) goes below all of them, using the whole width,
+ * and not between two buttons.
+ */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.actions > .banner {
+  order: 1;
+  flex: 1 0 100%;
+}
+
+.btn,
+.btn-link,
+.chip,
+.list-row {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* --------------------------------------------------------- Shell of the app */
+
+/*
+ * Phones first: the bar has the almacén, the operario and "Cerrar sesión", and the tabs are fixed at the bottom.
+ * From 768px the tabs go up, into the bar. They are one element (components/nav-tabs.tsx) that is placed from here.
+ */
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.shell-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+}
+
+.shell-who {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.shell-user {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 0.9375rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-content {
+  flex: 1;
+  min-width: 0;
+  /* What the fixed tab bar covers. */
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+}
+
+.shell-tabs {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  border-top: 1px solid var(--border);
+  background: var(--chrome);
+}
+
+.shell-tabs-list {
+  display: flex;
+}
+
+.shell-tabs-list > li {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.shell-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tabbar-h);
+  padding: 0 0.25rem;
+  color: var(--text-2);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Not only the color: heavier, and a line on top. */
+.shell-tab[aria-current="page"] {
+  box-shadow: inset 0 3px 0 var(--text);
+  color: var(--text);
+  font-weight: 800;
+}
+
+/* Pressed. Not the current one: from 768px that one is dark with white text, which a light background would hide. */
+.shell-tab:not([aria-current="page"]):active {
+  background: var(--surface-2);
+}
+
+.shell-tab-label {
+  position: relative;
+}
+
+/* Over the corner of the label, so that it does not take room from the other tabs. */
+.shell-tab-badge {
+  position: absolute;
+  top: -0.5rem;
+  left: 100%;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 0.125rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-align: center;
+}
+
+/* The almacén: a pill. With more than one it is a real <select>, laid over the pill so that the device's own picker opens. */
+.shell-almacen {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+}
+
+.shell-almacen-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.875rem;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.shell-almacen-pill-vacio {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.shell-almacen select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.shell-almacen:focus-within .shell-almacen-pill {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.shell-almacen[aria-busy="true"] .shell-almacen-pill {
+  opacity: 0.6;
+}
+
+/* Why the almacén did not change. It floats under the bar, and lets touches through to what is below it. */
+.shell-almacen-error {
+  position: fixed;
+  top: 4.5rem;
+  right: 1rem;
+  left: 1rem;
+  z-index: 40;
+  max-width: 30rem;
+  margin-inline: auto;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+
+@media (min-width: 768px) {
+  .shell-bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 0.5rem 1rem;
   }
+
+  /* It can shrink, and what gives is the name (it is cut with "…"): four tabs and this fit a 768px screen only just. */
+  .shell-who {
+    flex: 0 1 auto;
+    margin-left: auto;
+  }
+
+  .shell-content {
+    padding-bottom: 0;
+  }
+
+  .shell-tabs {
+    position: static;
+    padding-bottom: 0;
+    border-top: 0;
+    background: transparent;
+  }
+
+  .shell-tabs-list {
+    gap: 0.375rem;
+  }
+
+  .shell-tabs-list > li {
+    flex: none;
+  }
+
+  .shell-tab {
+    min-height: var(--tap);
+    padding: 0 1rem;
+    border-radius: 10px;
+    font-size: 1rem;
+  }
+
+  .shell-tab[aria-current="page"] {
+    background: var(--text);
+    box-shadow: none;
+    color: #ffffff;
+  }
+
+  .shell-tab-badge {
+    position: static;
+    display: inline-block;
+    margin-left: 0.5rem;
+  }
+}
+
+/* ------------------------------------------------------------------- Login */
+
+.login {
+  display: grid;
+  place-items: center;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 1rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 22.5rem;
+  padding: 1.5rem;
+}
+
+.login-card .login-form {
+  margin-top: 1.25rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.login-field .label + .input {
+  margin-top: 0;
 }
