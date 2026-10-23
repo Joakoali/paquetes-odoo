@@ -14,23 +14,65 @@ afterEach(() => {
 })
 
 describe('checkDuplicateTrackingNumbers', () => {
-  it('returns the tracking numbers already present in Odoo, via one call', async () => {
+  it('returns the picking of each tracking number already present in Odoo, via one call', async () => {
     vi.mocked(odooCall).mockResolvedValue([
-      { lot_id: [10, 'ABC123'] },
-      { lot_id: [11, 'XYZ789'] },
+      { lot_id: [10, 'ABC123'], picking_id: [100, 'MB92/IN/00010'] },
+      { lot_id: [11, 'XYZ789'], picking_id: [101, 'MB92/IN/00011'] },
     ])
 
     const result = await checkDuplicateTrackingNumbers(['ABC123', 'DEF456', 'XYZ789'])
 
-    expect(result).toEqual(['ABC123', 'XYZ789'])
+    expect(result).toEqual(new Map([['ABC123', 'MB92/IN/00010'], ['XYZ789', 'MB92/IN/00011']]))
     expect(odooCall).toHaveBeenCalledTimes(1)
     expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'search_read', {
       domain: [
         ['lot_id.name', 'in', ['ABC123', 'DEF456', 'XYZ789']],
         ['state', '!=', 'cancel'],
       ],
-      fields: ['lot_id'],
+      fields: ['lot_id', 'picking_id'],
     })
+  })
+
+  it('does not call Odoo when there is nothing to look for', async () => {
+    expect(await checkDuplicateTrackingNumbers([])).toEqual(new Map())
+    expect(odooCall).not.toHaveBeenCalled()
+  })
+
+  it('leaves out the tracking numbers Odoo has no line with a lot for', async () => {
+    vi.mocked(odooCall).mockResolvedValue([
+      { lot_id: false, picking_id: [100, 'MB92/IN/00010'] },
+      { lot_id: [11, 'XYZ789'], picking_id: [101, 'MB92/IN/00011'] },
+    ])
+
+    expect(await checkDuplicateTrackingNumbers(['ABC123', 'XYZ789'])).toEqual(new Map([['XYZ789', 'MB92/IN/00011']]))
+  })
+
+  it('names the first picking when a tracking number is on lines of two (the reception and the delivery that took it out)', async () => {
+    vi.mocked(odooCall).mockResolvedValue([
+      { lot_id: [10, 'ABC123'], picking_id: [100, 'MB92/IN/00010'] },
+      { lot_id: [10, 'ABC123'], picking_id: [200, 'MB92/OUT/00020'] },
+    ])
+
+    expect(await checkDuplicateTrackingNumbers(['ABC123'])).toEqual(new Map([['ABC123', 'MB92/IN/00010']]))
+  })
+
+  it('still reports a tracking number whose only line is in no picking (an inventory adjustment)', async () => {
+    vi.mocked(odooCall).mockResolvedValue([{ lot_id: [10, 'ABC123'], picking_id: false }])
+
+    expect(await checkDuplicateTrackingNumbers(['ABC123'])).toEqual(new Map([['ABC123', 'Odoo (sin albarán)']]))
+  })
+
+  it('prefers a line in a picking to one in no picking, whichever comes first', async () => {
+    vi.mocked(odooCall).mockResolvedValue([
+      { lot_id: [10, 'ABC123'], picking_id: false },
+      { lot_id: [10, 'ABC123'], picking_id: [100, 'MB92/IN/00010'] },
+      { lot_id: [11, 'XYZ789'], picking_id: [101, 'MB92/IN/00011'] },
+      { lot_id: [11, 'XYZ789'], picking_id: false },
+    ])
+
+    expect(await checkDuplicateTrackingNumbers(['ABC123', 'XYZ789'])).toEqual(
+      new Map([['ABC123', 'MB92/IN/00010'], ['XYZ789', 'MB92/IN/00011']]),
+    )
   })
 })
 

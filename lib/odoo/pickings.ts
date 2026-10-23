@@ -3,6 +3,7 @@ import { ConfiguracionError } from '../errores'
 
 interface MoveLineLotRead {
   lot_id: [number, string] | false
+  picking_id: [number, string] | false
 }
 
 /** Odoo `create` returns the new id(s); JSON-2 may hand back a scalar or a list. */
@@ -10,17 +11,34 @@ function firstId(res: number | number[]): number {
   return Array.isArray(res) ? res[0] : res
 }
 
-export async function checkDuplicateTrackingNumbers(trackingNumbers: string[]): Promise<string[]> {
-  if (trackingNumbers.length === 0) return []
+/** What stands for the picking of a move line that is in none (an inventory adjustment, say). */
+const SIN_PICKING = 'Odoo (sin albarán)'
+
+/**
+ * Where Odoo already has each of these tracking numbers: tracking number to the name of the picking
+ * ('MB92/IN/00010') whose move line (not cancelled) carries it. A tracking number Odoo does not have is
+ * not in the map. One request, whatever the number of tracking numbers.
+ *
+ * When a tracking number is on lines of two pickings (the reception, and the delivery that took it
+ * out) the first one stays. A line in no picking only names the place when there is no other line.
+ */
+export async function checkDuplicateTrackingNumbers(trackingNumbers: string[]): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  if (trackingNumbers.length === 0) return found
   const rows = await odooCall<MoveLineLotRead[]>('stock.move.line', 'search_read', {
     domain: [
       ['lot_id.name', 'in', trackingNumbers],
       ['state', '!=', 'cancel'],
     ],
-    fields: ['lot_id'],
+    fields: ['lot_id', 'picking_id'],
   })
-  const found = new Set(rows.filter((r) => r.lot_id).map((r) => (r.lot_id as [number, string])[1]))
-  return trackingNumbers.filter((t) => found.has(t))
+  for (const row of rows) {
+    if (!row.lot_id) continue
+    const trackingNumber = row.lot_id[1]
+    if (found.has(trackingNumber) && found.get(trackingNumber) !== SIN_PICKING) continue
+    found.set(trackingNumber, row.picking_id ? row.picking_id[1] : SIN_PICKING)
+  }
+  return found
 }
 
 export async function createIncomingPicking(almacenPickingTypeId: number, barcoOdooId: number): Promise<number> {
