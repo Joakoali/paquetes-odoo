@@ -1,5 +1,5 @@
 import { odooCall } from './client'
-import { ConfiguracionError } from '../errores'
+import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
 import { parseFechaOdoo } from '../fechas'
 
 /** A Many2one as `search_read` returns it: `[id, displayName]`, or `false` when it is empty. */
@@ -227,4 +227,56 @@ export async function getLineasEntregaPendiente(entrada: { outTypeId: number; ba
         courierNombre: linea.product_id ? linea.product_id[1] : SIN_PRODUCTO,
       }]
     : []))
+}
+
+/**
+ * Validates a delivery with only the lines chosen, and leaves the others in depósito: Odoo makes a native
+ * backorder of what was not delivered. Says how many lines stay behind.
+ *
+ * The validation looks at which lines are picked, so, in this order: it reads the lines of the picking,
+ * marks the chosen ones as picked and the rest (if there is a rest) as not picked, and validates. With a
+ * rest the validation carries `skip_backorder`, so that Odoo makes the backorder instead of opening the
+ * wizard that asks whether to; without one there is nothing to skip and it carries no context. If Odoo
+ * answers with an action (a wizard it wants confirmed) and not with `true`, nobody is there to answer it:
+ * it is an error.
+ *
+ * A chosen line that is not on the picking is not marked, nor counted. Nothing is marked or validated when
+ * no chosen line is on the picking: the validation would run with every line unpicked, which nobody asked for.
+ *
+ * This is the only place that knows how Odoo splits a delivery. The worker only says what to deliver.
+ */
+export async function validarEntrega(entrada: {
+  pickingId: number
+  moveLineIdsElegidas: number[]
+}): Promise<{ quedanEnDeposito: number }> {
+  const { pickingId } = entrada
+
+  const [picking] = await odooCall<Array<{ move_line_ids: number[] }>>('stock.picking', 'read', {
+    ids: [pickingId],
+    fields: ['move_line_ids'],
+  })
+  if (!picking) throw new Error(`picking ${pickingId} no existe en Odoo`)
+
+  const pedidas = new Set(entrada.moveLineIdsElegidas)
+  const lineasDelPicking = new Set(picking.move_line_ids)
+  const elegidas = [...pedidas].filter((linea) => lineasDelPicking.has(linea))
+  const sinEntregar = picking.move_line_ids.filter((linea) => !pedidas.has(linea))
+  if (elegidas.length === 0) {
+    throw new Error(`Ninguna de las líneas elegidas está en el picking ${pickingId}`)
+  }
+
+  await odooCall('stock.move.line', 'write', { ids: elegidas, vals: { picked: true } })
+  if (sinEntregar.length > 0) {
+    await odooCall('stock.move.line', 'write', { ids: sinEntregar, vals: { picked: false } })
+  }
+
+  const res = await odooCall<true | { res_model: string }>('stock.picking', 'button_validate', {
+    ids: [pickingId],
+    ...(sinEntregar.length > 0 ? { context: { skip_backorder: true } } : {}),
+  })
+  if (typeof res === 'object' && res !== null) {
+    throw new RespuestaOdooInesperadaError(`Odoo pidió confirmar (${res.res_model})`)
+  }
+
+  return { quedanEnDeposito: sinEntregar.length }
 }

@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('./client', () => ({ odooCall: vi.fn() }))
 import { odooCall } from './client'
-import { ConfiguracionError } from '../errores'
+import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
 import {
   checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking,
-  getBarcosConEntregaPendiente, getLineasEntregaPendiente,
+  getBarcosConEntregaPendiente, getLineasEntregaPendiente, validarEntrega,
 } from './pickings'
 
 beforeEach(() => {
@@ -359,5 +359,122 @@ describe('getLineasEntregaPendiente', () => {
     expect(err).toBeInstanceOf(ConfiguracionError)
     expect(err.message).toBe('ODOO_FIELD_BARCO no está configurado')
     expect(odooCall).not.toHaveBeenCalled()
+  })
+})
+
+describe('validarEntrega', () => {
+  /** An Odoo answer for each of the calls `validarEntrega` makes: the picking it reads, and what `button_validate` returns. */
+  function odooResponde(lineasDelPicking: number[], alValidar: unknown = true) {
+    vi.mocked(odooCall).mockImplementation((async (_modelo: string, metodo: string) => {
+      if (metodo === 'read') return [{ id: 700, move_line_ids: lineasDelPicking }]
+      if (metodo === 'button_validate') return alValidar
+      return true
+    }) as never)
+  }
+
+  /** The calls made to Odoo, in order, as [model, method, params]. */
+  const llamadas = () => vi.mocked(odooCall).mock.calls
+
+  it('picks only the chosen lines and validates with skip_backorder when some stay', async () => {
+    odooResponde([1, 2, 3])
+
+    expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1, 2] })).toEqual({ quedanEnDeposito: 1 })
+
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'write', { ids: [1, 2], vals: { picked: true } })
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'write', { ids: [3], vals: { picked: false } })
+    expect(odooCall).toHaveBeenCalledWith('stock.picking', 'button_validate', { ids: [700], context: { skip_backorder: true } })
+  })
+
+  it('reads the lines of the picking, marks the chosen and the rest, and only then validates', async () => {
+    odooResponde([1, 2, 3, 4])
+
+    await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [2, 4] })
+
+    // Nothing else is asked of Odoo, and in this order: the validation needs the flags in place.
+    expect(llamadas()).toEqual([
+      ['stock.picking', 'read', { ids: [700], fields: ['move_line_ids'] }],
+      ['stock.move.line', 'write', { ids: [2, 4], vals: { picked: true } }],
+      ['stock.move.line', 'write', { ids: [1, 3], vals: { picked: false } }],
+      ['stock.picking', 'button_validate', { ids: [700], context: { skip_backorder: true } }],
+    ])
+  })
+
+  it('validates plainly when every line is chosen: no line left unpicked and no context', async () => {
+    odooResponde([1, 2, 3])
+
+    expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1, 2, 3] })).toEqual({ quedanEnDeposito: 0 })
+
+    expect(llamadas()).toEqual([
+      ['stock.picking', 'read', { ids: [700], fields: ['move_line_ids'] }],
+      ['stock.move.line', 'write', { ids: [1, 2, 3], vals: { picked: true } }],
+      // No `context` at all: it is not a backorder, so there is nothing to skip.
+      ['stock.picking', 'button_validate', { ids: [700] }],
+    ])
+    expect(llamadas()[2][2]).not.toHaveProperty('context')
+  })
+
+  it('counts every line it leaves unpicked as staying in depósito', async () => {
+    odooResponde([1, 2, 3, 4, 5])
+
+    expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [5] })).toEqual({ quedanEnDeposito: 4 })
+  })
+
+  it('throws when Odoo answers with a wizard instead of true: a RespuestaOdooInesperadaError that names it', async () => {
+    odooResponde([1, 2], {
+      type: 'ir.actions.act_window',
+      res_model: 'stock.backorder.confirmation',
+      view_mode: 'form',
+      target: 'new',
+    })
+
+    const error = await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(error.message).toBe('Odoo pidió confirmar (stock.backorder.confirmation)')
+  })
+
+  it('also throws for a wizard when it validates plainly', async () => {
+    odooResponde([1], { type: 'ir.actions.act_window', res_model: 'stock.immediate.transfer' })
+
+    const error = await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(error.message).toBe('Odoo pidió confirmar (stock.immediate.transfer)')
+  })
+
+  it('does not take a chosen line that is not on the picking for one of its own', async () => {
+    odooResponde([1, 2, 3])
+
+    // 99 is on some other delivery: the picking is not the place to mark it, nor to count it.
+    expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [2, 99] })).toEqual({ quedanEnDeposito: 2 })
+
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'write', { ids: [2], vals: { picked: true } })
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'write', { ids: [1, 3], vals: { picked: false } })
+    expect(JSON.stringify(llamadas())).not.toContain('99')
+  })
+
+  it('validates nothing when none of the chosen lines is on the picking', async () => {
+    // With every line unpicked Odoo could take that as "deliver it all": it must not get that far.
+    odooResponde([1, 2, 3])
+
+    await expect(validarEntrega({ pickingId: 700, moveLineIdsElegidas: [98, 99] })).rejects.toThrow('Ninguna de las líneas elegidas está en el picking 700')
+
+    expect(llamadas()).toHaveLength(1) // the read
+  })
+
+  it('throws a readable error, before touching anything, when the picking no longer exists in Odoo', async () => {
+    vi.mocked(odooCall).mockResolvedValue([])
+
+    await expect(validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] })).rejects.toThrow('picking 700 no existe en Odoo')
+
+    expect(llamadas()).toHaveLength(1)
+  })
+
+  it('does not validate when marking the lines fails', async () => {
+    vi.mocked(odooCall).mockResolvedValueOnce([{ id: 700, move_line_ids: [1, 2] }]).mockRejectedValueOnce(new Error('Odoo se cayó'))
+
+    await expect(validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] })).rejects.toThrow('Odoo se cayó')
+
+    expect(llamadas().map(([, metodo]) => metodo)).toEqual(['read', 'write'])
   })
 })

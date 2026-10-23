@@ -1,8 +1,11 @@
-import { inArray } from 'drizzle-orm'
+import { and, asc, eq, gte, inArray } from 'drizzle-orm'
 import { db } from '../../db/client'
-import { barcosCache, type Almacen } from '../../db/schema'
+import { barcosCache, sesionesEscaneo, type Almacen, type SesionEscaneo } from '../../db/schema'
+import { registrarAuditoria } from '../audit'
 import { ConfiguracionError } from '../errores'
+import { inicioDeHoy } from '../fechas'
 import { getBarcosConEntregaPendiente } from '../odoo/pickings'
+import { publishSync } from '../queue/publish'
 import { contarSinEnviarPorBarco } from '../recepcion/recepciones'
 
 /** A barco of the delivery list. */
@@ -72,4 +75,118 @@ export async function listarBarcosParaEntregar(almacen: Pick<Almacen, 'id' | 'od
   }
 
   return barcos.sort(porAntiguedad)
+}
+
+/** The `data:image/png;base64,` that a canvas puts in front of the image: Odoo's `signature` wants what comes after it. */
+const PREFIJO_DATA_URL = /^data:[^,]*;base64,/i
+
+/**
+ * Registers the delivery the crew confirmed and queues it: the worker is the only one that writes it to Odoo.
+ *
+ * Idempotent by `id`. The phone makes the id up before its first try, so a second try with it (the connection
+ * dropped and the answer never came) finds the entrega already saved and does nothing: it is not queued or
+ * audited a second time.
+ *
+ * It is saved straight as `confirmada_pendiente_sync`: an entrega has no earlier stage, since what the phone
+ * sends is what the crew confirmed. The name is trimmed, and the signature is stored as bare base64, which is
+ * what Odoo takes.
+ *
+ * If queuing fails the error goes through and the entrega stays saved. A try repeated with the same id will
+ * not queue it (it is there already), so what gets it moving is Pendientes: it lists it as stuck after a
+ * while and queues it again with "Reintentar". It is not deleted on failure because a repeated try may have
+ * found it meanwhile and answered that it was registered.
+ */
+export async function registrarEntrega(entrada: {
+  id: string
+  operarioId: string
+  almacenId: number
+  barcoOdooId: number
+  pickingIds: number[]
+  moveLineIds: number[]
+  receptorNombre: string
+  firmaBase64: string
+}): Promise<void> {
+  const { id, operarioId, almacenId, barcoOdooId, moveLineIds } = entrada
+
+  const [creada] = await db.insert(sesionesEscaneo)
+    .values({
+      id,
+      operarioId,
+      almacenId,
+      barcoOdooId,
+      tipo: 'entrega',
+      estado: 'confirmada_pendiente_sync',
+      odooPickingIds: entrada.pickingIds,
+      odooMoveLineIds: moveLineIds,
+      receptorNombre: entrada.receptorNombre.trim(),
+      firmaData: entrada.firmaBase64.trim().replace(PREFIJO_DATA_URL, ''),
+      confirmedAt: new Date(),
+    })
+    .onConflictDoNothing()
+    .returning({ id: sesionesEscaneo.id })
+  // Already registered by an earlier try: it was queued then, and it is not queued twice.
+  if (!creada) return
+
+  await publishSync({ sesionId: id })
+
+  await registrarAuditoria({
+    operarioId,
+    accion: 'entrega_confirmada',
+    detalle: { sesionId: id, almacenId, barcoOdooId, paquetes: moveLineIds.length },
+  })
+}
+
+/** An entrega confirmed today. */
+export interface EntregaDeHoy {
+  id: string
+  barcoNombre: string
+  /** The packages that were handed over: the lines chosen. */
+  paquetes: number
+  /** Who received them, as the crew member typed it. */
+  receptorNombre: string
+  /** `enviando`: waiting for the worker. `ok`: it is in Odoo. `problema`: it failed, or it went in with a note. */
+  estado: 'enviando' | 'ok' | 'problema'
+}
+
+/** Entregas that were confirmed, whatever became of their sync. */
+const ESTADOS_CONFIRMADA: SesionEscaneo['estado'][] = ['confirmada_pendiente_sync', 'sincronizada', 'error']
+
+function estadoDeEntrega(estado: SesionEscaneo['estado'], ultimoError: string | null): EntregaDeHoy['estado'] {
+  if (estado === 'confirmada_pendiente_sync') return 'enviando'
+  // The same rule as for the recepciones: a sync that left a note in `ultimoError` is not a clean one.
+  return estado === 'sincronizada' && !ultimoError ? 'ok' : 'problema'
+}
+
+/**
+ * The entregas of the almacén that were confirmed since 00:00 of the day `ahora` falls on in Madrid, in the
+ * order they were confirmed, each with who received it and how its sync is going.
+ */
+export async function listarEntregadasHoy(almacenId: number, ahora: Date = new Date()): Promise<EntregaDeHoy[]> {
+  const filas = await db.select({
+    id: sesionesEscaneo.id,
+    barcoOdooId: sesionesEscaneo.barcoOdooId,
+    barcoNombre: barcosCache.nombre,
+    receptorNombre: sesionesEscaneo.receptorNombre,
+    lineas: sesionesEscaneo.odooMoveLineIds,
+    estado: sesionesEscaneo.estado,
+    ultimoError: sesionesEscaneo.ultimoError,
+  })
+    .from(sesionesEscaneo)
+    .leftJoin(barcosCache, eq(barcosCache.odooId, sesionesEscaneo.barcoOdooId))
+    .where(and(
+      eq(sesionesEscaneo.almacenId, almacenId),
+      eq(sesionesEscaneo.tipo, 'entrega'),
+      inArray(sesionesEscaneo.estado, ESTADOS_CONFIRMADA),
+      gte(sesionesEscaneo.confirmedAt, inicioDeHoy(ahora)),
+    ))
+    .orderBy(asc(sesionesEscaneo.confirmedAt), asc(sesionesEscaneo.id))
+
+  return filas.map((fila) => ({
+    id: fila.id,
+    // The same placeholder the recepciones use for a barco the cache does not know.
+    barcoNombre: fila.barcoNombre ?? `Barco #${fila.barcoOdooId}`,
+    paquetes: fila.lineas?.length ?? 0,
+    receptorNombre: fila.receptorNombre ?? '',
+    estado: estadoDeEntrega(fila.estado, fila.ultimoError),
+  }))
 }

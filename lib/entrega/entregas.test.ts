@@ -1,20 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
-// The Odoo read is mocked whole: these tests never reach Odoo. Publishing and auditing are mocked
-// because recepciones.ts imports them, and nothing here sends a recepción.
+// The Odoo read is mocked whole: these tests never reach Odoo. Publishing and auditing are mocked: nothing
+// here reaches QStash, and a test looks at what registrarEntrega (and recepciones.ts) hand them.
 vi.mock('@/lib/odoo/pickings', () => ({ getBarcosConEntregaPendiente: vi.fn() }))
 vi.mock('@/lib/queue/publish', () => ({ publishSync: vi.fn() }))
 vi.mock('@/lib/audit', () => ({ registrarAuditoria: vi.fn() }))
 
+import { eq } from 'drizzle-orm'
 import { db } from '@/db/client'
-import type { Almacen, Courier, Operario } from '@/db/schema'
+import { sesionesEscaneo, type Almacen, type Courier, type Operario } from '@/db/schema'
+import { registrarAuditoria } from '@/lib/audit'
 import { ConfiguracionError } from '@/lib/errores'
 import { getBarcosConEntregaPendiente, type BarcoConEntrega } from '@/lib/odoo/pickings'
+import { publishSync } from '@/lib/queue/publish'
 import { abrirRecepcion, escanearPaquete } from '@/lib/recepcion/recepciones'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
-import { listarBarcosParaEntregar } from './entregas'
+import { listarBarcosParaEntregar, listarEntregadasHoy, registrarEntrega } from './entregas'
 
 let veronika: Operario
 let mb92: Almacen
@@ -138,5 +141,209 @@ describe('listarBarcosParaEntregar', () => {
     vi.mocked(getBarcosConEntregaPendiente).mockRejectedValue(new Error('Odoo se cayó'))
 
     await expect(listarBarcosParaEntregar(mb92)).rejects.toThrow('Odoo se cayó')
+  })
+})
+
+const filaSesion = async (id: string) =>
+  (await db.select().from(sesionesEscaneo).where(eq(sesionesEscaneo.id, id)))[0]
+
+/** What the phone sends when the crew confirms: the lines chosen, the name typed and the signature as the canvas gives it. */
+function entradaDeEntrega(datos: Partial<Parameters<typeof registrarEntrega>[0]> = {}): Parameters<typeof registrarEntrega>[0] {
+  return {
+    id: crypto.randomUUID(),
+    operarioId: veronika.id,
+    almacenId: mb92.id,
+    barcoOdooId: 673,
+    pickingIds: [700, 701],
+    moveLineIds: [1, 2, 5],
+    receptorNombre: 'Capitán Pérez',
+    firmaBase64: 'data:image/png;base64,AAA',
+    ...datos,
+  }
+}
+
+describe('registrarEntrega', () => {
+  it('is idempotent by id: a retry after a dropped connection publishes once', async () => {
+    const entrada = entradaDeEntrega()
+
+    await registrarEntrega(entrada)
+    await registrarEntrega(entrada)
+
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
+    expect(publishSync).toHaveBeenCalledTimes(1)
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+  })
+
+  it('publishes once when the same entrega reaches the server twice at the same time', async () => {
+    const entrada = entradaDeEntrega()
+
+    await Promise.all([registrarEntrega(entrada), registrarEntrega(entrada)])
+
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
+    expect(publishSync).toHaveBeenCalledTimes(1)
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+  })
+
+  it('registers each id as an entrega of its own', async () => {
+    const primera = entradaDeEntrega()
+    const segunda = entradaDeEntrega()
+
+    await registrarEntrega(primera)
+    await registrarEntrega(segunda)
+
+    expect(await db.select().from(sesionesEscaneo)).toHaveLength(2)
+    expect(publishSync).toHaveBeenCalledTimes(2)
+    expect(publishSync).toHaveBeenCalledWith({ sesionId: primera.id })
+    expect(publishSync).toHaveBeenCalledWith({ sesionId: segunda.id })
+  })
+
+  it('stores the bare base64 and the trimmed crew name', async () => {
+    const entrada = entradaDeEntrega({ receptorNombre: '  Capitán Pérez \n', firmaBase64: 'data:image/png;base64,iVBORw0KGgo=' })
+
+    await registrarEntrega(entrada)
+
+    expect(await filaSesion(entrada.id)).toMatchObject({ receptorNombre: 'Capitán Pérez', firmaData: 'iVBORw0KGgo=' })
+  })
+
+  it.each([
+    ['another image type', 'data:image/jpeg;base64,/9j/4AAQ+x==', '/9j/4AAQ+x=='],
+    ['a signature that is already bare', 'iVBORw0KGgo=', 'iVBORw0KGgo='],
+  ])('keeps the whole signature, and only the signature, for %s', async (_caso, firmaBase64, guardada) => {
+    const entrada = entradaDeEntrega({ firmaBase64 })
+
+    await registrarEntrega(entrada)
+
+    expect((await filaSesion(entrada.id)).firmaData).toBe(guardada)
+  })
+
+  it('saves it as an entrega waiting for its sync, with where, who, the pickings and the lines chosen', async () => {
+    const entrada = entradaDeEntrega()
+
+    await registrarEntrega(entrada)
+
+    const fila = await filaSesion(entrada.id)
+    expect(fila).toMatchObject({
+      id: entrada.id,
+      tipo: 'entrega',
+      estado: 'confirmada_pendiente_sync',
+      operarioId: veronika.id,
+      almacenId: mb92.id,
+      barcoOdooId: 673,
+      odooPickingIds: [700, 701],
+      odooMoveLineIds: [1, 2, 5],
+      intentos: 0,
+      ultimoError: null,
+      ultimoErrorTipo: null,
+      syncedAt: null,
+    })
+    expect(Math.abs((fila.confirmedAt as Date).getTime() - Date.now())).toBeLessThan(5_000)
+  })
+
+  it('queues the entrega once it is saved, and audits it', async () => {
+    let vistaAlEncolar: Awaited<ReturnType<typeof filaSesion>> | undefined
+    vi.mocked(publishSync).mockImplementation(async ({ sesionId }) => {
+      vistaAlEncolar = await filaSesion(sesionId)
+    })
+    const entrada = entradaDeEntrega()
+
+    await registrarEntrega(entrada)
+
+    expect(publishSync).toHaveBeenCalledWith({ sesionId: entrada.id })
+    // The worker looks the entrega up the moment it gets the message: it has to be there already.
+    expect(vistaAlEncolar).toMatchObject({ id: entrada.id, estado: 'confirmada_pendiente_sync' })
+    expect(registrarAuditoria).toHaveBeenCalledWith({
+      operarioId: veronika.id,
+      accion: 'entrega_confirmada',
+      detalle: { sesionId: entrada.id, almacenId: mb92.id, barcoOdooId: 673, paquetes: 3 },
+    })
+  })
+
+  it('lets the error through when publishing fails, and keeps the entrega (Pendientes lists it as stuck)', async () => {
+    vi.mocked(publishSync).mockRejectedValue(new Error('QStash no responde'))
+    const entrada = entradaDeEntrega()
+
+    await expect(registrarEntrega(entrada)).rejects.toThrow('QStash no responde')
+
+    expect(await filaSesion(entrada.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', receptorNombre: 'Capitán Pérez' })
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+})
+
+describe('listarEntregadasHoy', () => {
+  // 12:00 in Madrid (summer time), so "today" began at 00:00 Madrid time, 22:00 UTC the day before.
+  const AHORA = new Date('2026-10-22T10:00:00Z')
+
+  /** An entrega confirmed at `confirmedAt`, written straight to the database so that it can be in any estado. */
+  async function entregada(
+    barcoOdooId: number,
+    confirmedAt: string,
+    estado: typeof sesionesEscaneo.$inferInsert['estado'],
+    datos: Partial<typeof sesionesEscaneo.$inferInsert> = {},
+  ) {
+    const [sesion] = await db.insert(sesionesEscaneo).values({
+      operarioId: veronika.id,
+      almacenId: mb92.id,
+      barcoOdooId,
+      tipo: 'entrega',
+      estado,
+      odooPickingIds: [700],
+      odooMoveLineIds: [1, 2],
+      receptorNombre: 'Capitán Pérez',
+      firmaData: 'AAA',
+      confirmedAt: new Date(confirmedAt),
+      ...datos,
+    }).returning()
+    return sesion
+  }
+
+  it('shows who received and the estado of each one, with its packages, for today in Madrid time only', async () => {
+    await seedBarco(db, { odooId: 677, nombre: 'ARCTIC' })
+    // Today, saved out of the order they were confirmed in: the list goes by when each was confirmed.
+    const enviando = await entregada(676, '2026-10-22T09:55:00Z', 'confirmada_pendiente_sync')
+    const conError = await entregada(675, '2026-10-22T09:00:00Z', 'error', { receptorNombre: 'Marta Gil' })
+    const conNota = await entregada(674, '2026-10-22T08:30:00Z', 'sincronizada', { receptorNombre: 'Luis Soto', ultimoError: 'Una nota' })
+    const ok = await entregada(673, '2026-10-22T08:00:00Z', 'sincronizada', { odooMoveLineIds: [1, 2, 3] })
+    const justoHoy = await entregada(677, '2026-10-21T22:00:00Z', 'sincronizada', { receptorNombre: 'Ana Ruiz', odooMoveLineIds: [9] })
+    // Not in the list: one second before today began, another almacén, a recepción, one still open.
+    await entregada(678, '2026-10-21T21:59:59Z', 'sincronizada')
+    const mpv = await seedAlmacen(db, { prefijo: 'MPV', nombre: 'Port Vell (MPV)', odooWarehouseId: 2, odooInTypeId: 9, odooOutTypeId: 10 })
+    await entregada(680, '2026-10-22T09:00:00Z', 'sincronizada', { almacenId: mpv.id })
+    await entregada(681, '2026-10-22T09:00:00Z', 'sincronizada', { tipo: 'recepcion', receptorNombre: null, odooMoveLineIds: null })
+    await entregada(682, '2026-10-22T09:00:00Z', 'en_curso')
+
+    expect(await listarEntregadasHoy(mb92.id, AHORA)).toEqual([
+      { id: justoHoy.id, barcoNombre: 'ARCTIC', paquetes: 1, receptorNombre: 'Ana Ruiz', estado: 'ok' },
+      { id: ok.id, barcoNombre: 'MAYANQUEEN', paquetes: 3, receptorNombre: 'Capitán Pérez', estado: 'ok' },
+      // It synced, but with a note in ultimoError: somebody has to look.
+      { id: conNota.id, barcoNombre: 'MAYANQUEENIV', paquetes: 2, receptorNombre: 'Luis Soto', estado: 'problema' },
+      { id: conError.id, barcoNombre: 'Barco #675', paquetes: 2, receptorNombre: 'Marta Gil', estado: 'problema' },
+      { id: enviando.id, barcoNombre: 'Barco #676', paquetes: 2, receptorNombre: 'Capitán Pérez', estado: 'enviando' },
+    ])
+  })
+
+  it('counts the whole day in Madrid time, not in UTC: 23:30 UTC of the day before is already today', async () => {
+    // 2026-12-02 10:00 UTC is 11:00 in Madrid (winter time): today began at 23:00 UTC of the day before.
+    const ahora = new Date('2026-12-02T10:00:00Z')
+    const hoy = await entregada(673, '2026-12-01T23:30:00Z', 'sincronizada')
+    await entregada(674, '2026-12-01T22:59:59Z', 'sincronizada')
+
+    expect((await listarEntregadasHoy(mb92.id, ahora)).map((entrega) => entrega.id)).toEqual([hoy.id])
+  })
+
+  it('takes the moment it is called as "now" when no date is given', async () => {
+    const reciente = await entregada(673, '2026-10-22T09:59:00Z', 'confirmada_pendiente_sync')
+    await entregada(674, '2026-10-19T09:59:00Z', 'sincronizada') // three days ago
+    vi.useFakeTimers({ toFake: ['Date'] }) // only the clock: the database driver still needs its timers
+    vi.setSystemTime(AHORA)
+
+    try {
+      expect((await listarEntregadasHoy(mb92.id)).map((entrega) => entrega.id)).toEqual([reciente.id])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('answers an empty list when nothing was delivered today', async () => {
+    expect(await listarEntregadasHoy(mb92.id, AHORA)).toEqual([])
   })
 })
