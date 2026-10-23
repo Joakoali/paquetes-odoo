@@ -352,7 +352,12 @@ describe('syncRecepcionSession', () => {
     })
 
     it('names the operario who opened the recepción when no package went in the picking', async () => {
-      const sesion = await crearRecepcion([{ courier: dhl, paquetes: [{ tracking: 'T1', operario: eduardo }] }])
+      // Only a picking that an earlier attempt made can end up with nothing in it: a recepción whose packages
+      // are all duplicates makes none.
+      const sesion = await crearRecepcion(
+        [{ courier: dhl, paquetes: [{ tracking: 'T1', operario: eduardo }] }],
+        { odooPickingId: PICKING_ID },
+      )
       vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue(new Map([['T1', 'MB92/IN/00010']]))
 
       await syncRecepcionSession(sesion.id)
@@ -455,7 +460,7 @@ describe('syncRecepcionSession', () => {
       ])
     })
 
-    it('does not validate a picking without moves when every package is a duplicate, and closes the recepción with a note', async () => {
+    it('does not make a picking when every package turns out to be a duplicate, and closes the recepción with a note', async () => {
       const sesion = await crearRecepcion(
         [
           { courier: dhl, paquetes: [{ tracking: 'T1' }] },
@@ -463,30 +468,86 @@ describe('syncRecepcionSession', () => {
         ],
         { ultimoErrorTipo: 'conexion' }, // from an earlier attempt that did not finish
       )
-      vi.mocked(checkDuplicateTrackingNumbers).mockImplementation(
-        async (trackings) => new Map(trackings.map((t) => [t, 'MB92/IN/00010'])),
-      )
+      vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue(new Map([
+        ['T1', 'MB92/IN/00010'],
+        ['T2', 'MB92/IN/00011'],
+      ]))
 
       await syncRecepcionSession(sesion.id)
 
+      // With nothing to put in it, there is no picking to make, to validate, or to leave a note and Recibido por on.
+      expect(createIncomingPicking).not.toHaveBeenCalled()
       expect(addCourierMoveWithLines).not.toHaveBeenCalled()
       expect(validatePicking).not.toHaveBeenCalled()
+      expect(odooCall).not.toHaveBeenCalled()
       // The recepción closes instead of failing forever; the note is what Pendientes shows.
-      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', ultimoErrorTipo: null })
-      expect((await filaSesion(sesion.id)).ultimoError).toMatch(/duplicados/)
-      expect((await paquetes(sesion.id)).every((p) => p.estado === 'duplicado' && p.duplicadoAlEnviar)).toBe(true)
+      const fila = await filaSesion(sesion.id)
+      expect(fila).toMatchObject({ estado: 'sincronizada', ultimoErrorTipo: null, odooPickingId: null, odooPickingRef: null })
+      expect(fila.ultimoError).toMatch(/duplicados/)
+      expect(Math.abs((fila.syncedAt as Date).getTime() - Date.now())).toBeLessThan(5_000)
+      expect(await paquetes(sesion.id)).toEqual([
+        { trackingNumber: 'T1', estado: 'duplicado', duplicadoAlEnviar: true, duplicadoRef: 'MB92/IN/00010' },
+        { trackingNumber: 'T2', estado: 'duplicado', duplicadoAlEnviar: true, duplicadoRef: 'MB92/IN/00011' },
+      ])
+      const auditoria = await db.select().from(auditLog)
+      expect(auditoria).toHaveLength(1)
+      expect(auditoria[0]).toMatchObject({ accion: 'sync_ok', operarioId: null })
+      expect(auditoria[0].detalle).toEqual({ sesionId: sesion.id, odooPickingRef: null })
+    })
+
+    it('keeps working on the picking an earlier attempt made when every package turns out to be a duplicate', async () => {
+      const sesion = await crearRecepcion(
+        [{ courier: dhl, paquetes: [{ tracking: 'T1', operario: eduardo }] }],
+        { odooPickingId: PICKING_ID },
+      )
+      vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue(new Map([['T1', 'MB92/IN/00010']]))
+
+      await syncRecepcionSession(sesion.id)
+
+      expect(createIncomingPicking).not.toHaveBeenCalled() // it has one already
+      expect(addCourierMoveWithLines).not.toHaveBeenCalled()
+      expect(validatePicking).not.toHaveBeenCalled() // a picking without moves can not be validated
+      // It reads the picking and leaves the note and Recibido por on it, as ever (and reads no state: nothing to validate).
+      expect(vi.mocked(odooCall).mock.calls.map(([, metodo]) => metodo)).toEqual(['read', 'message_post', 'write'])
+      expect(llamadasAOdoo('stock.picking', 'write')).toEqual([{ ids: [PICKING_ID], vals: { [RECIBIDO_POR]: 'Veronika' } }])
+      const fila = await filaSesion(sesion.id)
+      expect(fila).toMatchObject({ estado: 'sincronizada', odooPickingId: PICKING_ID, odooPickingRef: PICKING_REF })
+      expect(fila.ultimoError).toMatch(/duplicados/)
+      expect(await paquetes(sesion.id)).toEqual([
+        { trackingNumber: 'T1', estado: 'duplicado', duplicadoAlEnviar: true, duplicadoRef: 'MB92/IN/00010' },
+      ])
     })
   })
 
   describe('recepciones with nothing to send', () => {
-    it('finishes a recepción without packages quietly, without the all-duplicates note', async () => {
-      const sesion = await crearRecepcion([])
+    // Lazy, because the couriers only exist once the test has started.
+    it.each<[string, () => TandaSembrada[]]>([
+      ['no courier batch at all', () => []],
+      ['a courier batch whose packages were all taken out', () => [{ courier: dhl, paquetes: [] }]],
+    ])('finishes a recepción with %s quietly: no picking, no all-duplicates note', async (_caso, tandas) => {
+      const sesion = await crearRecepcion(tandas())
 
       await syncRecepcionSession(sesion.id)
 
+      expect(createIncomingPicking).not.toHaveBeenCalled()
+      expect(odooCall).not.toHaveBeenCalled()
       expect(addCourierMoveWithLines).not.toHaveBeenCalled()
       expect(validatePicking).not.toHaveBeenCalled()
-      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', ultimoError: null, odooPickingRef: PICKING_REF })
+      expect(await filaSesion(sesion.id)).toMatchObject({
+        estado: 'sincronizada', ultimoError: null, odooPickingId: null, odooPickingRef: null,
+      })
+    })
+
+    it('finishes quietly, on the picking, a recepción without packages whose picking an earlier attempt made', async () => {
+      const sesion = await crearRecepcion([], { odooPickingId: PICKING_ID })
+
+      await syncRecepcionSession(sesion.id)
+
+      expect(createIncomingPicking).not.toHaveBeenCalled()
+      expect(vi.mocked(odooCall).mock.calls.map(([, metodo]) => metodo)).toEqual(['read', 'message_post', 'write'])
+      expect(await filaSesion(sesion.id)).toMatchObject({
+        estado: 'sincronizada', ultimoError: null, odooPickingId: PICKING_ID, odooPickingRef: PICKING_REF,
+      })
     })
 
     it('tolerates a courier batch whose packages were all taken out, even if the courier has no Odoo product', async () => {

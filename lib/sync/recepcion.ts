@@ -40,6 +40,31 @@ async function scannerNames(sesion: SesionEscaneo): Promise<string> {
 }
 
 /**
+ * Closes the recepción as synced and audits it. `note` is what Pendientes shows when every package turned
+ * out to be a duplicate; `pickingRef` is null when no picking was made. A failure that an earlier attempt
+ * left behind (one QStash then retried) is over.
+ */
+async function finishSync(
+  sesionId: string,
+  result: { note: string | null; pickingRef: string | null },
+): Promise<void> {
+  await db.update(sesionesEscaneo)
+    .set({
+      estado: 'sincronizada',
+      syncedAt: new Date(),
+      ultimoError: result.note,
+      ultimoErrorTipo: null,
+    })
+    .where(eq(sesionesEscaneo.id, sesionId))
+
+  await registrarAuditoria({
+    operarioId: null,
+    accion: 'sync_ok',
+    detalle: { sesionId, odooPickingRef: result.pickingRef },
+  })
+}
+
+/**
  * THE single place recepción data is pushed to Odoo. Called by the QStash
  * single-consumer worker, one session at a time. Idempotent: safe to retry
  * after a partial failure — an already-created picking is reused and any
@@ -105,6 +130,36 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   const allTracking = [...new Set([...trackingByBatch.values()].flat())]
   const liveDuplicates = await checkDuplicateTrackingNumbers(allTracking)
 
+  // Found while sending: kept in the recepción, flagged, and pointing to the picking that has them.
+  for (const { batch } of batchesToSend) {
+    const dupes = (trackingByBatch.get(batch.id) ?? []).filter((t) => liveDuplicates.has(t))
+    for (const trackingNumber of dupes) {
+      await db.update(sesionItems)
+        .set({
+          estado: 'duplicado',
+          duplicadoAlEnviar: true,
+          duplicadoRef: liveDuplicates.get(trackingNumber),
+        })
+        .where(and(
+          eq(sesionItems.courierBatchId, batch.id),
+          eq(sesionItems.trackingNumber, trackingNumber),
+        ))
+    }
+  }
+
+  // A picking is only made to put something in it. If nothing is left to send (every package turned out to
+  // be a duplicate, or there is no package at all) and no earlier attempt made a picking, there is none to
+  // validate or to leave the note and Recibido por on, and an empty draft would be left in Odoo: the
+  // recepción just closes, with the note for Pendientes if it had packages. A picking an earlier attempt
+  // did make is kept, and goes on below.
+  if (!sesion.odooPickingId && allTracking.every((t) => liveDuplicates.has(t))) {
+    await finishSync(sesionId, {
+      note: allTracking.length > 0 ? TODOS_DUPLICADOS : null,
+      pickingRef: null,
+    })
+    return
+  }
+
   let pickingId = sesion.odooPickingId
   if (!pickingId) {
     pickingId = await createIncomingPicking(almacen.odooInTypeId, sesion.barcoOdooId)
@@ -136,22 +191,7 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
 
   for (const { batch, productId } of batchesToSend) {
     const trackingNumbers = trackingByBatch.get(batch.id) ?? []
-    const dupes = trackingNumbers.filter((t) => liveDuplicates.has(t))
     const toSync = trackingNumbers.filter((t) => !liveDuplicates.has(t))
-
-    // Found while sending: kept in the recepción, flagged, and pointing to the picking that has them.
-    for (const trackingNumber of dupes) {
-      await db.update(sesionItems)
-        .set({
-          estado: 'duplicado',
-          duplicadoAlEnviar: true,
-          duplicadoRef: liveDuplicates.get(trackingNumber),
-        })
-        .where(and(
-          eq(sesionItems.courierBatchId, batch.id),
-          eq(sesionItems.trackingNumber, trackingNumber),
-        ))
-    }
 
     if (toSync.length > 0) {
       const moveId = await addCourierMoveWithLines(
@@ -176,8 +216,8 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     }
   }
 
-  // Every tracking number turned out to be a duplicate: the picking has no
-  // moves, and validating a move-less picking is an Odoo UserError that would
+  // Every tracking number turned out to be a duplicate (and an earlier attempt had made the picking): it has
+  // no moves, and validating a move-less picking is an Odoo UserError that would
   // fail every retry forever. Close the session instead and leave a note so
   // /pendientes surfaces it for a human.
   if (anyMove) {
@@ -205,21 +245,10 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     })
   }
 
-  await db.update(sesionesEscaneo)
-    .set({
-      estado: 'sincronizada',
-      syncedAt: new Date(),
-      // Only a session that actually HAD packages, all of them duplicates,
-      // gets the note. An empty session just finishes quietly.
-      ultimoError: !anyMove && allTracking.length > 0 ? TODOS_DUPLICADOS : null,
-      // A failure an earlier attempt left behind (one QStash then retried) is over.
-      ultimoErrorTipo: null,
-    })
-    .where(eq(sesionesEscaneo.id, sesionId))
-
-  await registrarAuditoria({
-    operarioId: null,
-    accion: 'sync_ok',
-    detalle: { sesionId, odooPickingRef: pickingRef },
+  await finishSync(sesionId, {
+    // Only a session that actually HAD packages, all of them duplicates,
+    // gets the note. An empty session just finishes quietly.
+    note: !anyMove && allTracking.length > 0 ? TODOS_DUPLICADOS : null,
+    pickingRef,
   })
 }
