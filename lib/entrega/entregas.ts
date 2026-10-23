@@ -91,6 +91,9 @@ const PREFIJO_DATA_URL = /^data:[^,]*;base64,/i
  * waiting for its sync any more. One that is not (synced, or failed for good, which goes back through
  * Pendientes' "Reintentar") is left alone, and so is an id that belongs to something other than an entrega.
  *
+ * The confirmation is audited right after the save, before queuing, so it is recorded exactly once: the crew
+ * confirmed it whatever happens to the queue, and the retry that has to queue it audits nothing.
+ *
  * It is saved straight as `confirmada_pendiente_sync`: an entrega has no earlier stage, since what the phone
  * sends is what the crew confirmed. The name is trimmed, and the signature is stored as bare base64, which is
  * what Odoo takes.
@@ -129,8 +132,8 @@ export async function registrarEntrega(entrada: {
     .returning({ id: sesionesEscaneo.id })
 
   if (!creada) {
-    // An earlier try saved it, and audited it if it got that far: no audit here. It is queued again only if it is
-    // still waiting for its sync, which is also true when the first try did queue it and the worker has not got to it.
+    // An earlier try saved it and audited it: no audit here. It is queued again only if it is still waiting for its
+    // sync, which is also true when the first try did queue it and the worker has not got to it.
     const existente = await db.query.sesionesEscaneo.findFirst({
       columns: { estado: true },
       where: and(eq(sesionesEscaneo.id, id), eq(sesionesEscaneo.tipo, 'entrega')),
@@ -139,13 +142,16 @@ export async function registrarEntrega(entrada: {
     return
   }
 
-  await publishSync({ sesionId: id })
-
+  // Audited before queuing: the crew's confirmation is a fact as soon as the entrega is saved, whatever then happens
+  // to the queue. That way it is recorded exactly once, also when publishing fails here and a retry has to queue it.
+  // (It never throws, so it cannot get in the way of queuing.)
   await registrarAuditoria({
     operarioId,
     accion: 'entrega_confirmada',
     detalle: { sesionId: id, almacenId, barcoOdooId, paquetes: moveLineIds.length },
   })
+
+  await publishSync({ sesionId: id })
 }
 
 /** An entrega confirmed today. */

@@ -203,8 +203,13 @@ describe('registrarEntrega', () => {
     expect(publishSync).toHaveBeenCalledTimes(2)
     expect(publishSync).toHaveBeenLastCalledWith({ sesionId: entrada.id })
     expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
-    // At most once, never twice: the first try failed before auditing, and a retry audits nothing.
-    expect(vi.mocked(registrarAuditoria).mock.calls.length).toBeLessThanOrEqual(1)
+    // Exactly once: the first try audited it when it saved it, though publishing then failed, and the retry audits nothing.
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+    expect(registrarAuditoria).toHaveBeenCalledWith({
+      operarioId: veronika.id,
+      accion: 'entrega_confirmada',
+      detalle: { sesionId: entrada.id, almacenId: mb92.id, barcoOdooId: 673, paquetes: 3 },
+    })
   })
 
   it('fails the same way on a retry while publishing keeps failing, with the entrega still saved once', async () => {
@@ -217,7 +222,7 @@ describe('registrarEntrega', () => {
     expect(publishSync).toHaveBeenCalledTimes(2)
     expect(await db.select().from(sesionesEscaneo)).toHaveLength(1)
     expect(await filaSesion(entrada.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', receptorNombre: 'Capitán Pérez' })
-    expect(registrarAuditoria).not.toHaveBeenCalled()
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1) // by the first try; the retry audits nothing, however many times it fails
   })
 
   it.each(['error', 'en_curso'] as const)('does not queue a retry for an entrega that is %s', async (estado) => {
@@ -336,14 +341,27 @@ describe('registrarEntrega', () => {
     })
   })
 
-  it('lets the error through when publishing fails, and keeps the entrega', async () => {
+  it('audits the confirmation as soon as the entrega is saved, before queuing it', async () => {
+    const entrada = entradaDeEntrega()
+
+    await registrarEntrega(entrada)
+
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+    expect(publishSync).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(registrarAuditoria).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(publishSync).mock.invocationCallOrder[0])
+  })
+
+  it('lets the error through when publishing fails, and keeps the entrega, already audited', async () => {
     vi.mocked(publishSync).mockRejectedValue(new Error('QStash no responde'))
     const entrada = entradaDeEntrega()
 
     await expect(registrarEntrega(entrada)).rejects.toThrow('QStash no responde')
 
     expect(await filaSesion(entrada.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', receptorNombre: 'Capitán Pérez' })
-    expect(registrarAuditoria).not.toHaveBeenCalled()
+    // The confirmation is a fact as soon as the entrega is saved, whatever then happens to the queue.
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+    expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({ accion: 'entrega_confirmada' }))
   })
 })
 
