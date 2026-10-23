@@ -3,6 +3,7 @@ import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { haceCuanto } from '@/lib/fechas'
 import { alcanceDelOperario, listarProblemas, type Problema, type TipoProblema } from '@/lib/sync/pendientes'
 import { marcarRevisadoAction, reintentarAction } from './actions'
+import { AccionProblema } from './AccionProblema'
 
 const TITULOS: Record<TipoProblema, string> = {
   error: 'No se pudo enviar a Odoo',
@@ -13,20 +14,6 @@ const TITULOS: Record<TipoProblema, string> = {
 const SESIONES: Record<Problema['sesionTipo'], string> = {
   recepcion: 'Recepción',
   entrega: 'Entrega',
-}
-
-/**
- * `<form action>` takes a function that answers nothing, and the actions answer a `ResultadoAccion`, which only
- * a client component could show. These two are what the forms call: they run the action and let the answer go.
- */
-async function reintentarDesdeFormulario(sesionId: string): Promise<void> {
-  'use server'
-  await reintentarAction(sesionId)
-}
-
-async function marcarRevisadoDesdeFormulario(sesionId: string): Promise<void> {
-  'use server'
-  await marcarRevisadoAction(sesionId)
 }
 
 function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
@@ -58,13 +45,13 @@ function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
 
       <div>
         {tipo === 'duplicado' ? null : (
-          <form action={reintentarDesdeFormulario.bind(null, sesionId)}>
-            <button type="submit" className="btn btn-primary">Reintentar</button>
-          </form>
+          <AccionProblema accion={reintentarAction} sesionId={sesionId} className="btn btn-primary">
+            Reintentar
+          </AccionProblema>
         )}
-        <form action={marcarRevisadoDesdeFormulario.bind(null, sesionId)}>
-          <button type="submit" className="btn btn-secondary">Marcar como revisado</button>
-        </form>
+        <AccionProblema accion={marcarRevisadoAction} sesionId={sesionId} className="btn btn-secondary">
+          Marcar como revisado
+        </AccionProblema>
       </div>
 
       {problema.detalle ? (

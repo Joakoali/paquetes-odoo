@@ -13,6 +13,7 @@ import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { UnauthorizedError } from '@/lib/auth/guards'
 import { alcanceDelOperario, listarProblemas, type Problema } from '@/lib/sync/pendientes'
 import { marcarRevisadoAction, reintentarAction } from './actions'
+import { AccionProblema } from './AccionProblema'
 import PendientesPage from './page'
 
 /** The page reads the clock once: "hace 3 h" is counted from here. */
@@ -61,28 +62,35 @@ async function html(...problemas: Problema[]): Promise<string> {
 
 type Elemento = ReactElement<Record<string, unknown>>
 
-/** Every element of the tree with its function components expanded, so that the forms can be looked at as they are. */
+/**
+ * Every element of the tree with its function components expanded, so that the cards can be looked at as they are.
+ * The buttons are not: they are client components that keep state, and what the page decides about them is the
+ * element itself, with the props it gives them.
+ */
 function elementos(nodo: ReactNode): Elemento[] {
   if (Array.isArray(nodo)) return nodo.flatMap(elementos)
   if (!isValidElement<Record<string, unknown>>(nodo)) return []
+  if (nodo.type === AccionProblema) return [nodo]
   if (typeof nodo.type === 'function') return elementos((nodo.type as (props: unknown) => ReactNode)(nodo.props))
   return [nodo, ...elementos(nodo.props.children as ReactNode)]
 }
 
-/** The forms of the page, each with the text of its button and a way of pressing it as the browser would. */
+/** The buttons of the page, in order: each with its text, the action it runs, the sesión it runs it on and its look. */
 async function botones(...problemas: Problema[]) {
   vi.mocked(listarProblemas).mockResolvedValue(problemas)
   return elementos(await PendientesPage())
-    .filter((elemento) => elemento.type === 'form')
-    .map((formulario) => {
-      const boton = elementos(formulario.props.children as ReactNode).find((elemento) => elemento.type === 'button')
-      return {
-        texto: String(boton?.props.children),
-        tipo: boton?.props.type,
-        apretar: () => (formulario.props.action as (datos: FormData) => Promise<void>)(new FormData()),
-      }
-    })
+    .filter((elemento) => elemento.type === AccionProblema)
+    .map((boton) => ({
+      texto: boton.props.children,
+      accion: boton.props.accion,
+      sesionId: boton.props.sesionId,
+      className: boton.props.className,
+    }))
 }
+
+/** Which of the two actions a button runs, by name, so that a failure reads better than two anonymous mocks. */
+const nombreDe = (accion: unknown) =>
+  accion === reintentarAction ? 'reintentarAction' : accion === marcarRevisadoAction ? 'marcarRevisadoAction' : String(accion)
 
 describe('PendientesPage', () => {
   describe('who sees what', () => {
@@ -238,51 +246,49 @@ describe('PendientesPage', () => {
       expect((await botones(problema({ tipo }))).map((boton) => boton.texto)).toEqual(esperados)
     })
 
-    it('submit their form', async () => {
-      const todos = await botones(problema({ tipo: 'error' }))
-
-      expect(todos.map((boton) => boton.tipo)).toEqual(['submit', 'submit'])
-    })
-
-    it('are tied to the sesión of their own card', async () => {
+    it('run the action of their name on the sesión of their own card', async () => {
       const todos = await botones(
         problema({ sesionId: 'sesion-a', tipo: 'error' }),
         problema({ sesionId: 'sesion-b', tipo: 'trabado' }),
         problema({ sesionId: 'sesion-c', tipo: 'duplicado' }),
       )
 
-      for (const boton of todos) await boton.apretar()
-
-      expect(vi.mocked(reintentarAction).mock.calls).toEqual([['sesion-a'], ['sesion-b']])
-      expect(vi.mocked(marcarRevisadoAction).mock.calls).toEqual([['sesion-a'], ['sesion-b'], ['sesion-c']])
+      expect(todos.map((boton) => [boton.texto, nombreDe(boton.accion), boton.sesionId])).toEqual([
+        ['Reintentar', 'reintentarAction', 'sesion-a'],
+        ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-a'],
+        ['Reintentar', 'reintentarAction', 'sesion-b'],
+        ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-b'],
+        ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-c'],
+      ])
     })
 
-    it('press only their own action', async () => {
-      const [reintentar, revisar] = await botones(problema({ sesionId: 'sesion-a', tipo: 'error' }))
-      expect([reintentar.texto, revisar.texto]).toEqual(['Reintentar', 'Marcar como revisado'])
+    it('are handed the action itself, never a call to it: nothing runs while the page is drawn', async () => {
+      await botones(problema(), problema({ sesionId: 'sesion-b' }))
 
-      await reintentar.apretar()
-      expect(reintentarAction).toHaveBeenCalledTimes(1)
+      expect(reintentarAction).not.toHaveBeenCalled()
       expect(marcarRevisadoAction).not.toHaveBeenCalled()
-
-      await revisar.apretar()
-      expect(marcarRevisadoAction).toHaveBeenCalledTimes(1)
-      expect(reintentarAction).toHaveBeenCalledTimes(1)
     })
 
-    it('send the sesión and nothing else, whatever the form carries', async () => {
-      const [reintentar] = await botones(problema({ sesionId: 'sesion-a', tipo: 'error' }))
+    it('are the main button for Reintentar and the secondary one for Marcar como revisado', async () => {
+      const [reintentar, revisar] = await botones(problema({ tipo: 'error' }))
 
-      await reintentar.apretar()
-
-      expect(reintentarAction).toHaveBeenCalledWith('sesion-a')
+      expect([reintentar.texto, reintentar.className]).toEqual(['Reintentar', 'btn btn-primary'])
+      expect([revisar.texto, revisar.className]).toEqual(['Marcar como revisado', 'btn btn-secondary'])
     })
 
-    it('do not break the page when the action refuses: the answer is for the callers that can show it', async () => {
-      vi.mocked(reintentarAction).mockResolvedValue({ ok: false, error: 'No tenés acceso a esto.' })
-      const [reintentar] = await botones(problema({ sesionId: 'sesion-a', tipo: 'error' }))
+    it('are drawn as plain buttons, enabled and with no message, until one is pressed', async () => {
+      const pagina = await html(problema({ tipo: 'error' }))
 
-      await expect(reintentar.apretar()).resolves.toBeUndefined()
+      expect(pagina).toMatch(/<button[^>]*type="button"[^>]*>Reintentar<\/button>/)
+      expect(pagina).toMatch(/<button[^>]*class="btn btn-primary"[^>]*>Reintentar<\/button>/)
+      expect(pagina).toMatch(/<button[^>]*type="button"[^>]*>Marcar como revisado<\/button>/)
+      expect(pagina).toMatch(/<button[^>]*class="btn btn-secondary"[^>]*>Marcar como revisado<\/button>/)
+      expect(pagina).not.toContain('disabled')
+      expect(pagina).not.toContain('role="alert"')
+    })
+
+    it('are not in a form: they run the action and show its answer themselves', async () => {
+      expect(await html(problema({ tipo: 'error' }), problema({ sesionId: 'sesion-b', tipo: 'duplicado' }))).not.toContain('<form')
     })
   })
 })
