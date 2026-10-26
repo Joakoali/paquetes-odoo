@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { almacenes, operarioAlmacenes, type Almacen } from '../../db/schema'
 
@@ -18,6 +18,13 @@ export async function getAlmacenesForOperario(operarioId: string): Promise<Almac
   return filas.map((fila) => fila.almacen)
 }
 
+/** Every almacén that is still active, by name, like `getAlmacenesForOperario`: what the admin can assign. */
+export async function listAlmacenesActivos(): Promise<Almacen[]> {
+  return db.select().from(almacenes)
+    .where(eq(almacenes.activo, true))
+    .orderBy(asc(sql`lower(${almacenes.nombre})`), asc(almacenes.id))
+}
+
 /**
  * Server-side authorization check for spec §6: an operario may only work in the
  * almacenes assigned to them. The UI merely hides the others. It looks at the
@@ -30,10 +37,19 @@ export async function operarioHasAlmacen(operarioId: string, almacenId: number):
   return row !== undefined && row !== null
 }
 
+/**
+ * Replaces the operario's links to the ACTIVE almacenes with `almacenIds`. The links to almacenes that
+ * went inactive are not touched: the admin form only shows the active ones (`getAlmacenesForOperario`),
+ * so a save cannot speak for the rest, and dropping them would lose the assignment of an almacén that
+ * Odoo later brings back.
+ */
 export async function setAlmacenesForOperario(operarioId: string, almacenIds: number[]): Promise<void> {
-  const del = db.delete(operarioAlmacenes).where(eq(operarioAlmacenes.operarioId, operarioId))
+  const delActivos = db.delete(operarioAlmacenes).where(and(
+    eq(operarioAlmacenes.operarioId, operarioId),
+    inArray(operarioAlmacenes.almacenId, db.select({ id: almacenes.id }).from(almacenes).where(eq(almacenes.activo, true))),
+  ))
   if (almacenIds.length === 0) {
-    await del
+    await delActivos
     return
   }
 
@@ -41,7 +57,11 @@ export async function setAlmacenesForOperario(operarioId: string, almacenIds: nu
   // the operario with no almacenes at all. `db.batch` is neon-http's atomic
   // primitive — the driver has no `transaction()` (it throws outright).
   await db.batch([
-    del,
-    db.insert(operarioAlmacenes).values(almacenIds.map((almacenId) => ({ operarioId, almacenId }))),
+    delActivos,
+    // A form drawn before a refresh can still send an almacén that has gone inactive since, and the operario
+    // keeps that link: it is already there, and not a reason to fail the save.
+    db.insert(operarioAlmacenes)
+      .values([...new Set(almacenIds)].map((almacenId) => ({ operarioId, almacenId })))
+      .onConflictDoNothing(),
   ])
 }

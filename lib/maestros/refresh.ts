@@ -1,4 +1,4 @@
-import { eq, isNull, max, notInArray, or, sql, type AnyColumn } from 'drizzle-orm'
+import { count, eq, isNull, max, notInArray, or, sql, type AnyColumn } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { almacenes, barcosCache, courierUso, couriers } from '../../db/schema'
 import {
@@ -48,6 +48,15 @@ export async function refreshMaestros(ahora: Date = new Date()): Promise<Resumen
 export async function ultimoRefresco(): Promise<Date | null> {
   const [fila] = await db.select({ ultimo: max(barcosCache.updatedAt) }).from(barcosCache)
   return fila?.ultimo ?? null
+}
+
+/** How many almacenes and couriers are active: the ones Odoo has, as of the last refresh. */
+export async function contarMaestrosActivos(): Promise<{ almacenes: number; couriers: number }> {
+  const [[delAlmacen], [delCourier]] = await Promise.all([
+    db.select({ total: count() }).from(almacenes).where(eq(almacenes.activo, true)),
+    db.select({ total: count() }).from(couriers).where(eq(couriers.activo, true)),
+  ])
+  return { almacenes: delAlmacen.total, couriers: delCourier.total }
 }
 
 /** Inside `ON CONFLICT DO UPDATE`: the value the INSERT proposed for `columna`, i.e. what Odoo just sent. */

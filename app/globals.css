@@ -6,7 +6,7 @@
  * Order: tokens, base, shared classes, the shell of the app (components/app-shell.tsx and the ones it uses), login,
  * the reception screen of a barco (app/(app)/recepcion/[sesionId], components/scan-input.tsx and courier-picker.tsx), the
  * home of Recepción (app/(app)/recepcion/RecepcionHome.tsx and components/barco-search.tsx), the delivery screens of the
- * phone (app/(app)/entrega and components/signature-pad.tsx).
+ * phone (app/(app)/entrega and components/signature-pad.tsx), the admin screens (app/admin).
  */
 
 /* ------------------------------------------------------------------ Tokens */
@@ -183,8 +183,8 @@ details[open] > summary::before {
 /* ---------------------------------------------------------- Shared classes */
 
 /*
- * The container of a screen. A bare <main> (the admin screens, until they are redone) gets the same, with no weight
- * (:where), so that any class can still change it.
+ * The container of a screen. A bare <main> (the login's, which only changes what it needs) gets the same, with no
+ * weight (:where), so that any class can still change it.
  */
 :where(main),
 .page {
@@ -1310,4 +1310,24 @@ details[open] > summary::before {
   position: absolute;
   top: 0;
   right: 0;
+}
+
+/* ------------------------------------------------------------------- Admin */
+
+/* The almacenes of an operario: the rows to tick, and the button under them. */
+.form-almacenes > * + * {
+  margin-top: 1rem;
+}
+
+/* A row to tick (the almacenes of an operario): the box is as big as a finger needs, and the whole row is the target. */
+.fila-marca {
+  cursor: pointer;
+}
+
+.fila-marca input[type="checkbox"] {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  accent-color: var(--primary);
 }

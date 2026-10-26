@@ -17,7 +17,7 @@ import {
 } from '@/lib/odoo/maestros'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
-import { DIAS_USO_COURIERS, refreshMaestros, ultimoRefresco } from './refresh'
+import { contarMaestrosActivos, DIAS_USO_COURIERS, refreshMaestros, ultimoRefresco } from './refresh'
 
 const MB92: AlmacenOdoo = { warehouseId: 1, codigo: 'MB92', nombre: 'MB92 - Barcelona', inTypeId: 1, outTypeId: 2 }
 const MPV: AlmacenOdoo = { warehouseId: 2, codigo: 'MPV', nombre: 'MPV - Port Vell', inTypeId: 9, outTypeId: 10 }
@@ -362,5 +362,23 @@ describe('ultimoRefresco', () => {
     await refreshMaestros(AHORA)
 
     expect(await ultimoRefresco()).toEqual(AHORA)
+  })
+})
+
+describe('contarMaestrosActivos', () => {
+  it('is zero for both while nothing has been read from Odoo', async () => {
+    expect(await contarMaestrosActivos()).toEqual({ almacenes: 0, couriers: 0 })
+  })
+
+  it('counts the almacenes and the couriers that are active, and not the ones Odoo no longer has', async () => {
+    await seedAlmacen(db, { prefijo: 'MB92', odooWarehouseId: 1 })
+    await seedAlmacen(db, { prefijo: 'MPV', odooWarehouseId: 2 })
+    await seedAlmacen(db, { prefijo: 'MLC', odooWarehouseId: null, activo: false })
+    await seedCourier(db, { odooProductId: 11 })
+    await seedCourier(db, { nombre: 'Correos', odooProductId: 12 })
+    await seedCourier(db, { nombre: 'Seur', odooProductId: 13 })
+    await seedCourier(db, { nombre: 'UPS (incorrecto)', odooProductId: 21, activo: false })
+
+    expect(await contarMaestrosActivos()).toEqual({ almacenes: 2, couriers: 3 })
   })
 })

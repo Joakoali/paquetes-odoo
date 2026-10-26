@@ -7,7 +7,9 @@ import { db } from '@/db/client'
 import { almacenes, operarioAlmacenes, type Almacen, type Operario } from '@/db/schema'
 import { seedAlmacen, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
-import { getAlmacenesForOperario, operarioHasAlmacen, setAlmacenesForOperario } from './operarioAlmacenes'
+import {
+  getAlmacenesForOperario, listAlmacenesActivos, operarioHasAlmacen, setAlmacenesForOperario,
+} from './operarioAlmacenes'
 
 let operario: Operario
 let otro: Operario
@@ -58,6 +60,50 @@ describe('operario almacenes', () => {
 
     expect(await enlaces(operario)).toEqual([])
     expect(await getAlmacenesForOperario(operario.id)).toEqual([])
+  })
+
+  describe('the links to almacenes that went inactive', () => {
+    // What the admin form shows is the active ones only, so a save can only speak for those: a link to an almacén a
+    // refresh deactivated is not the form's to drop, and it has to be there if that almacén comes back from Odoo.
+    it('survive a save that replaces the active ones', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      await desactivar(barcelona)
+
+      await setAlmacenesForOperario(operario.id, [valencia.id])
+
+      expect(await enlaces(operario)).toEqual([barcelona.id, valencia.id])
+      expect(await getAlmacenesForOperario(operario.id)).toEqual([valencia])
+    })
+
+    it('survive a save with nothing chosen', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      await desactivar(barcelona)
+
+      await setAlmacenesForOperario(operario.id, [])
+
+      expect(await enlaces(operario)).toEqual([barcelona.id])
+    })
+
+    it('are back when the almacén is active again', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      await desactivar(barcelona)
+      await setAlmacenesForOperario(operario.id, [madrid.id, valencia.id])
+
+      await db.update(almacenes).set({ activo: true }).where(eq(almacenes.id, barcelona.id))
+
+      expect((await getAlmacenesForOperario(operario.id)).map((a) => a.id)).toEqual([barcelona.id, madrid.id, valencia.id])
+    })
+
+    it('do not make a save fail when a stale form sends one of them again', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      // The form was drawn while Barcelona was active, and is saved after a refresh deactivated it.
+      await desactivar(barcelona)
+
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+
+      expect(await enlaces(operario)).toEqual([madrid.id, barcelona.id])
+    })
+
   })
 
   it('does not touch the assignments of other operarios', async () => {
@@ -125,5 +171,27 @@ describe('operario almacenes', () => {
 
       expect((await getAlmacenesForOperario(operario.id)).map((a) => a.id)).toEqual([madrid.id, gemelaDeMadrid.id])
     })
+  })
+})
+
+describe('listAlmacenesActivos', () => {
+  it('lists the active almacenes by name, and not the ones Odoo no longer has', async () => {
+    await desactivar(barcelona)
+
+    expect((await listAlmacenesActivos()).map((a) => a.id)).toEqual([madrid.id, valencia.id])
+  })
+
+  it('sorts the names without caring about capitals, and by id when two are the same', async () => {
+    const minuscula = await seedAlmacen(db, { prefijo: 'ALC1', nombre: 'alicante', odooWarehouseId: 4 })
+    const gemelaDeMadrid = await seedAlmacen(db, { prefijo: 'MAD2', nombre: 'Madrid', odooWarehouseId: 5 })
+
+    expect((await listAlmacenesActivos()).map((a) => a.id))
+      .toEqual([minuscula.id, barcelona.id, madrid.id, gemelaDeMadrid.id, valencia.id])
+  })
+
+  it('is empty when there is no active almacén', async () => {
+    await Promise.all([madrid, barcelona, valencia].map(desactivar))
+
+    expect(await listAlmacenesActivos()).toEqual([])
   })
 })
