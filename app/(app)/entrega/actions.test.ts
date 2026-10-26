@@ -93,10 +93,14 @@ describe('confirmarEntregaAction', () => {
     })
   })
 
-  it('revalidates the list of Entrega, where the entrega shows up under "Entregadas hoy"', async () => {
-    await confirmarEntregaAction(entrada())
+  it('revalidates nothing: that would re-render the barco page the phone is on, in the same response', async () => {
+    // Next re-renders the CURRENT route whatever path is revalidated. The re-render reads Odoo again (twice, on an instance
+    // that admits one request a second), and its lines have changed: the flow would remount before it could say "Entrega
+    // registrada", back at the packages with all of them chosen and a fresh id, or the page could even come back as a
+    // failed reading. The list of Entrega is not cached on the client (a dynamic page), so going there reads it afresh.
+    expect(await confirmarEntregaAction(entrada())).toEqual({ ok: true, valor: undefined })
 
-    expect(revalidatePath).toHaveBeenCalledWith('/entrega')
+    expect(revalidatePath).not.toHaveBeenCalled()
   })
 
   it('takes the operario and the almacén from the session, never from the input', async () => {

@@ -98,7 +98,9 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
 
   useEffect(() => {
     if (paso !== 'hecho') return
-    const espera = setTimeout(() => router.push('/entrega'), ESPERA_ANTES_DE_VOLVER_MS)
+    // Replaced and not pushed: with this barco page in the history, "Atrás" would bring it back as the browser kept it, with
+    // every package chosen and a fresh id, one tap away from a second entrega of the same packages.
+    const espera = setTimeout(() => router.replace('/entrega'), ESPERA_ANTES_DE_VOLVER_MS)
     return () => clearTimeout(espera)
   }, [paso, router])
 
@@ -152,7 +154,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
           {textoDePaquetes(resumen.elegidas)} de {barcoNombre}. Figura en «Entregadas hoy» de la lista de barcos.
         </p>
         <div className="actions">
-          <Link href="/entrega" className="btn btn-primary">Volver a Entrega</Link>
+          <Link href="/entrega" replace className="btn btn-primary">Volver a Entrega</Link>
         </div>
       </>
     )

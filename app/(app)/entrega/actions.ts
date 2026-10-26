@@ -124,7 +124,10 @@ export async function confirmarEntregaAction(entrada: {
       receptorNombre,
       firmaBase64: entrada.firmaDataUrl,
     })
-    revalidatePath('/entrega')
+    // Nothing is revalidated here, on purpose. Next re-renders the route the action was called from (the barco page)
+    // whatever path is revalidated, and the phone is about to say "Entrega registrada" there: the re-render reads Odoo
+    // again, its lines have changed, and the flow would remount (back at the packages, with a fresh id) before it could.
+    // The list of Entrega is a dynamic page that the client does not cache, so going back to it reads it afresh.
   })
 }
 
