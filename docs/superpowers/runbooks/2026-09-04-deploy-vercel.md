@@ -289,7 +289,7 @@ Sobre `https://webapp-paqueteria.vercel.app`:
   - En **Upstash Console → QStash → Events / Queues → `odoo-sync`** aparece un job y se procesa OK (200).
   - La tabla `barcos_cache` en Neon se llena (Neon SQL Editor: `SELECT count(*) FROM barcos_cache;`).
   - Si el job falla con 401 → firma QStash mal (`QSTASH_*_SIGNING_KEY`). Si falla con error de conexión/URL → `APP_BASE_URL` mal (volver al paso 6).
-- [ ] **(e)** **Vercel → Project → Settings → Cron Jobs**: aparece `/api/cron/refresh-caches` con schedule `0 6 * * *` (de `vercel.json`). Los crons **solo corren en deployments de producción**. Para probar sin esperar a las 06:00 UTC, "Run" desde el dashboard, o:
+- [ ] **(e)** **Vercel → Project → Settings → Cron Jobs**: aparece `/api/cron/refresh-caches` con schedule `0 2 * * *` (de `vercel.json`). Los crons **solo corren en deployments de producción**. Para probar sin esperar a las 02:00 UTC, "Run" desde el dashboard, o:
   ```bash
   curl -i "https://webapp-paqueteria.vercel.app/api/cron/refresh-caches" -H "Authorization: Bearer $CRON_SECRET"
   ```
@@ -420,4 +420,4 @@ vercel rollback
 5. **¿Git remoto ahora o después?** El deploy por CLI no lo necesita. Si se quiere CI/preview deployments, crear repo GitHub, `vercel git connect`, y **fijar la rama de producción a `master`** (default `main`).
 6. **Región de las funciones.** Neon está en `aws-eu-central-1` (Frankfurt). Conviene fijar la región de Vercel a `fra1` (Project → Settings → Functions, o `"regions": ["fra1"]` en `vercel.json`) para minimizar latencia DB. Decisión opcional.
 7. **Operario `admin`/`admin1234` de dev en Neon:** ¿existe? Si sí, desactivarlo tras crear el admin real.
-8. **Cron a las 06:00 UTC** (`0 6 * * *`): confirmar que esa hora (08:00 CET / 07:00 en invierno) es aceptable para el refresco diario de `barcos_cache`.
+8. **Cron a las 02:00 UTC** (`0 2 * * *`): el refresco diario de barcos, almacenes, couriers y trackings corre de noche (03:00 en invierno / 04:00 en verano, hora de Madrid), no al empezar la jornada. Confirmar que esa hora es aceptable.

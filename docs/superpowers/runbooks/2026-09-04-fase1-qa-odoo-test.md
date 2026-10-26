@@ -106,7 +106,7 @@ Cada paso: **acción en la UI → comportamiento esperado en la UI → qué veri
 
 **Comportamiento esperado (UI)**
 - El form (`refreshBarcosAction`) encola un job en la cola `odoo-sync` (`publishRefreshBarcos` → `${APP_BASE_URL}/api/qstash/refresh-barcos`). No hay feedback visual explícito además de que la página no da error.
-- El cron diario (`vercel.json`, `0 6 * * *` UTC → `/api/cron/refresh-caches`) hace lo mismo automáticamente; este botón es el disparo manual.
+- El cron diario (`vercel.json`, `0 2 * * *` UTC → `/api/cron/refresh-caches`) hace lo mismo automáticamente; este botón es el disparo manual.
 
 **Verificación (consola QStash)**
 - En la cola `odoo-sync` aparece un mensaje nuevo con destino `.../api/qstash/refresh-barcos` y termina en estado **Delivered** (HTTP 200). Si queda en error, revisar `QSTASH_*` y `APP_BASE_URL`.
