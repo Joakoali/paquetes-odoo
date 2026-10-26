@@ -48,10 +48,22 @@ export async function createOperarioAction(entrada: {
   })
 }
 
-/** Activates or deactivates an operario: `activo` is what it is to be after this. */
+/** What Postgres accepts as a uuid. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Activates or deactivates an operario: `activo` is what it is to be after this. The admin cannot lock everybody out,
+ * so deactivating yourself is refused here (the domain does not know who is asking) and so is deactivating the last
+ * active admin (the domain knows). The values come from the client like everything else: an id that is not a uuid
+ * names nobody, and a state that is not true or false is not one to be written to the database.
+ */
 export async function toggleOperarioActivoAction(id: string, activo: boolean): Promise<ResultadoAccion> {
   return ejecutarAccion(async () => {
     const admin = await requireAdminFromCookies()
+    if (typeof id !== 'string' || !UUID.test(id)) throw new ErrorParaOperario('Ese operario no existe.')
+    if (typeof activo !== 'boolean') throw new ErrorParaOperario('Ese cambio no es válido.')
+    if (!activo && id.toLowerCase() === admin.id) throw new ErrorParaOperario('No podés desactivar tu propio usuario.')
+
     await setOperarioActivo(id, activo)
     await registrarAuditoria({
       operarioId: admin.id,

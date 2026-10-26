@@ -52,6 +52,85 @@ describe('admin operarios', () => {
   })
 })
 
+describe('setOperarioActivo', () => {
+  const activoDe = async (id: string) => (await db.query.operarios.findFirst({ where: eq(operarios.id, id) }))?.activo
+
+  it('says in words that the operario does not exist, and writes nothing, for an id that names nobody', async () => {
+    const ana = await seedOperario(db, { nombre: 'Ana' })
+
+    const error = await setOperarioActivo('00000000-0000-4000-8000-000000000000', false).catch((e) => e)
+
+    expect(error).toBeInstanceOf(ErrorParaOperario)
+    expect(error.message).toBe('Ese operario no existe.')
+    expect(await activoDe(ana.id)).toBe(true)
+  })
+
+  describe('the last active admin', () => {
+    const ULTIMO_ADMIN = 'Tiene que quedar al menos un admin activo.'
+
+    it('cannot be deactivated: nobody could get in to activate anyone again', async () => {
+      const unico = await seedOperario(db, { nombre: 'Joaquín', rol: 'admin' })
+      await seedOperario(db, { nombre: 'Ana' })
+
+      const error = await setOperarioActivo(unico.id, false).catch((e) => e)
+
+      expect(error).toBeInstanceOf(ErrorParaOperario)
+      expect(error.message).toBe(ULTIMO_ADMIN)
+      expect(await activoDe(unico.id)).toBe(true)
+    })
+
+    it('can be deactivated when another admin is active', async () => {
+      const uno = await seedOperario(db, { nombre: 'Joaquín', rol: 'admin' })
+      const otro = await seedOperario(db, { nombre: 'Marta', rol: 'admin' })
+
+      await setOperarioActivo(uno.id, false)
+
+      expect(await activoDe(uno.id)).toBe(false)
+      expect(await activoDe(otro.id)).toBe(true)
+    })
+
+    it('is not saved by an admin who is already inactive: only an active one counts', async () => {
+      const activo = await seedOperario(db, { nombre: 'Joaquín', rol: 'admin' })
+      await seedOperario(db, { nombre: 'Marta', rol: 'admin', activo: false })
+
+      await expect(setOperarioActivo(activo.id, false)).rejects.toThrow(ULTIMO_ADMIN)
+
+      expect(await activoDe(activo.id)).toBe(true)
+    })
+
+    it('is not saved by another operario who is not an admin', async () => {
+      const admin = await seedOperario(db, { nombre: 'Joaquín', rol: 'admin' })
+      await seedOperario(db, { nombre: 'Ana', rol: 'operario' })
+
+      await expect(setOperarioActivo(admin.id, false)).rejects.toThrow(ULTIMO_ADMIN)
+    })
+
+    it('does not stop an admin who is already inactive from being "deactivated" again', async () => {
+      const baja = await seedOperario(db, { nombre: 'Marta', rol: 'admin', activo: false })
+
+      await setOperarioActivo(baja.id, false)
+
+      expect(await activoDe(baja.id)).toBe(false)
+    })
+
+    it('does not stop the activation of anybody', async () => {
+      const baja = await seedOperario(db, { nombre: 'Marta', rol: 'admin', activo: false })
+
+      await setOperarioActivo(baja.id, true)
+
+      expect(await activoDe(baja.id)).toBe(true)
+    })
+
+    it('does not matter when the operario who is deactivated is not an admin, whoever is left', async () => {
+      const ana = await seedOperario(db, { nombre: 'Ana' })
+
+      await setOperarioActivo(ana.id, false)
+
+      expect(await activoDe(ana.id)).toBe(false)
+    })
+  })
+})
+
 describe('listOperariosConAlmacenes', () => {
   // Created out of order, both of the names and of the prefixes, so that sorting shows.
   const nuevaAlmacen = (prefijo: string, odooWarehouseId: number, datos: Partial<typeof almacenes.$inferInsert> = {}) =>

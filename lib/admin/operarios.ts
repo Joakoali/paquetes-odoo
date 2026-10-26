@@ -1,4 +1,4 @@
-import { asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, exists, ne, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { almacenes, operarioAlmacenes, operarios, type Operario } from '../../db/schema'
 import { hashPassword } from '../auth/password'
@@ -56,6 +56,28 @@ export async function createOperario(input: {
   return row
 }
 
+/**
+ * Activates or deactivates an operario. An id that names nobody is told in words (the update would do nothing and
+ * the admin would be told it worked), and so is the one thing that must never happen: deactivating the last active admin,
+ * which would leave nobody who can get into the admin screens to activate anyone again.
+ *
+ * For an active admin that is being deactivated, the check that another active admin is left and the update are one
+ * statement, and the update is the one that is conditional: nothing happens between looking and writing.
+ */
 export async function setOperarioActivo(id: string, activo: boolean): Promise<void> {
-  await db.update(operarios).set({ activo }).where(eq(operarios.id, id))
+  const operario = await db.query.operarios.findFirst({ columns: { rol: true, activo: true }, where: eq(operarios.id, id) })
+  if (!operario) throw new ErrorParaOperario('Ese operario no existe.')
+
+  if (activo || operario.rol !== 'admin' || !operario.activo) {
+    await db.update(operarios).set({ activo }).where(eq(operarios.id, id))
+    return
+  }
+
+  const otroAdminActivo = db.select({ uno: sql`1` }).from(operarios)
+    .where(and(eq(operarios.rol, 'admin'), eq(operarios.activo, true), ne(operarios.id, id)))
+  const desactivados = await db.update(operarios)
+    .set({ activo: false })
+    .where(and(eq(operarios.id, id), exists(otroAdminActivo)))
+    .returning({ id: operarios.id })
+  if (desactivados.length === 0) throw new ErrorParaOperario('Tiene que quedar al menos un admin activo.')
 }

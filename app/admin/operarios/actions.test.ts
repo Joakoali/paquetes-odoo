@@ -111,6 +111,88 @@ describe('createOperarioAction', () => {
 })
 
 describe('toggleOperarioActivoAction', () => {
+  const UUID_DE_NADIE = '00000000-0000-4000-8000-000000000000'
+  const activoDe = async (id: string) => (await db.query.operarios.findFirst({ where: eq(operarios.id, id) }))?.activo
+
+  describe('an admin cannot lock everybody out', () => {
+    it('refuses to deactivate yourself, in words, and changes, audits and refreshes nothing', async () => {
+      expect(await toggleOperarioActivoAction(admin.id, false)).toEqual({ ok: false, error: 'No podés desactivar tu propio usuario.' })
+
+      expect(await activoDe(admin.id)).toBe(true)
+      expect(await auditoria()).toEqual([])
+      expect(revalidatePath).not.toHaveBeenCalled()
+    })
+
+    it('refuses it even when there are other admins: it is about whose account it is', async () => {
+      await seedOperario(db, { nombre: 'Marta', rol: 'admin' })
+
+      expect(await toggleOperarioActivoAction(admin.id, false)).toEqual({ ok: false, error: 'No podés desactivar tu propio usuario.' })
+
+      expect(await activoDe(admin.id)).toBe(true)
+    })
+
+    it('refuses it for the id written in capitals, which is the same account', async () => {
+      expect(await toggleOperarioActivoAction(admin.id.toUpperCase(), false))
+        .toEqual({ ok: false, error: 'No podés desactivar tu propio usuario.' })
+
+      expect(await activoDe(admin.id)).toBe(true)
+    })
+
+    it('lets another admin be deactivated when there is one active left', async () => {
+      const marta = await seedOperario(db, { nombre: 'Marta', rol: 'admin' })
+
+      expect(await toggleOperarioActivoAction(marta.id, false)).toEqual({ ok: true, valor: undefined })
+
+      expect(await activoDe(marta.id)).toBe(false)
+      expect(await auditoria()).toHaveLength(1)
+    })
+
+    it('refuses to deactivate the last active admin, in words, and changes and audits nothing', async () => {
+      // The session of an admin that someone deactivated a moment ago can still be the one asking: the only active admin
+      // is the one being deactivated.
+      const marta = await seedOperario(db, { nombre: 'Marta', rol: 'admin' })
+      await db.update(operarios).set({ activo: false }).where(eq(operarios.id, admin.id))
+
+      expect(await toggleOperarioActivoAction(marta.id, false)).toEqual({ ok: false, error: 'Tiene que quedar al menos un admin activo.' })
+
+      expect(await activoDe(marta.id)).toBe(true)
+      expect(await auditoria()).toEqual([])
+      expect(revalidatePath).not.toHaveBeenCalled()
+    })
+
+    it('lets yourself be activated: it is only deactivating that is refused', async () => {
+      expect(await toggleOperarioActivoAction(admin.id, true)).toEqual({ ok: true, valor: undefined })
+    })
+
+    it.each(['false', 0, null, undefined])('refuses %j as the new state: as text it would slip past the check on yourself, and still deactivate', async (activo) => {
+      expect(await toggleOperarioActivoAction(admin.id, activo as unknown as boolean)).toEqual({ ok: false, error: 'Ese cambio no es válido.' })
+
+      expect(await activoDe(admin.id)).toBe(true)
+      expect(await auditoria()).toEqual([])
+    })
+  })
+
+  it('says in words that the operario does not exist, and writes no audit row, for an id that names nobody', async () => {
+    expect(await toggleOperarioActivoAction(UUID_DE_NADIE, false)).toEqual({ ok: false, error: 'Ese operario no existe.' })
+    expect(await toggleOperarioActivoAction(UUID_DE_NADIE, true)).toEqual({ ok: false, error: 'Ese operario no existe.' })
+
+    expect(await auditoria()).toEqual([])
+    expect(revalidatePath).not.toHaveBeenCalled()
+  })
+
+  it.each(['no-es-un-id', '', '123', "' OR 1=1 --", `${UUID_DE_NADIE}x`])('says it too for "%s", which is not an id at all: the database would only fail', async (id) => {
+    expect(await toggleOperarioActivoAction(id, false)).toEqual({ ok: false, error: 'Ese operario no existe.' })
+
+    expect(await auditoria()).toEqual([])
+  })
+
+  it('says it too for something that is not even text', async () => {
+    expect(await toggleOperarioActivoAction(undefined as unknown as string, false)).toEqual({ ok: false, error: 'Ese operario no existe.' })
+    expect(await toggleOperarioActivoAction(42 as unknown as string, false)).toEqual({ ok: false, error: 'Ese operario no existe.' })
+
+    expect(await auditoria()).toEqual([])
+  })
+
   it.each([false, true])('sets activo to %s and audits it as the admin who did it', async (activo) => {
     const ana = await seedOperario(db, { nombre: 'Ana', activo: !activo })
 
