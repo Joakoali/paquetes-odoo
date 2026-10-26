@@ -131,7 +131,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       const resultado = await llamarAccion(() => confirmarEntregaAction({
         id,
         barcoOdooId,
-        pickingIds: resumen.pickingIds,
+        // Only the lines: the server finds the deliveries they are on in Odoo, and takes no word of it from the phone.
         moveLineIds: resumen.moveLineIds,
         receptorNombre: receptor,
         firmaDataUrl: firma,

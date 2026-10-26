@@ -1,61 +1,110 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import type { Almacen } from '@/db/schema'
 import { ejecutarAccion, type ResultadoAccion } from '@/lib/acciones'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
-import { registrarEntrega } from '@/lib/entrega/entregas'
-import { ErrorParaOperario } from '@/lib/errores'
+import { entregaGuardada, registrarEntrega } from '@/lib/entrega/entregas'
+import { resolverElegidas } from '@/lib/entrega/lineas'
+import { ConfiguracionError, ErrorParaOperario } from '@/lib/errores'
+import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { enviarRecepcionesAbiertas } from '@/lib/recepcion/recepciones'
+import { mensajeDeLecturaFallida } from '@/lib/ui/lectura-fallida'
 import { MAX_NOMBRE_RECEPTOR } from '@/lib/ui/seleccion-entrega'
 
 /**
  * These actions authenticate, check the almacén and translate errors; the work is in the domain, which trusts its
  * parameters. An entrega is made in the almacén the operario is working in: it is the active one, as for every
  * action on the delivery screens.
+ *
+ * What a phone sends is not trusted, and an entrega is written to production Odoo: the ids it names are checked against
+ * what Odoo itself has waiting for the barco in the almacén before anything is saved.
  */
+
+/** What the phone makes up before its first try. Postgres would fail on anything else, with a message that is not for the operario. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** The biggest id the `integer` column of the entregas holds: a barco with a bigger one cannot exist. */
+const ID_MAXIMO = 2_147_483_647
 
 /** What a canvas gives for a signature: `data:image/png;base64,` and then the image. Odoo is given what comes after it. */
 const FIRMA_PNG = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/
 
+/** The ids the rest of the action works with: the first thing that is looked at, before the session or the database are. */
+function validarIdentificadores(entrada: { id: unknown; barcoOdooId: unknown }): void {
+  const idValido = typeof entrada.id === 'string' && UUID.test(entrada.id)
+  const barcoValido = typeof entrada.barcoOdooId === 'number'
+    && Number.isInteger(entrada.barcoOdooId)
+    && entrada.barcoOdooId > 0
+    && entrada.barcoOdooId <= ID_MAXIMO
+  if (!idValido || !barcoValido) throw new ErrorParaOperario('Esa entrega no es válida. Volvé a abrir el barco.')
+}
+
 /** What the screen already makes sure of (the button is not enabled without it): this is for whoever calls the action without the screen. */
 function validarConfirmacion(
-  entrada: { receptorNombre: string; pickingIds: number[]; moveLineIds: number[]; firmaDataUrl: string },
+  entrada: { receptorNombre: string; moveLineIds: number[]; firmaDataUrl: string },
 ): string {
   const receptor = typeof entrada.receptorNombre === 'string' ? entrada.receptorNombre.trim() : ''
   if (receptor === '') throw new ErrorParaOperario('Falta el nombre de quien recibe.')
   if (receptor.length > MAX_NOMBRE_RECEPTOR) throw new ErrorParaOperario('El nombre de quien recibe es demasiado largo.')
-  // Lines with no delivery to touch would be "registered" and then do nothing in Odoo.
-  const sinPaquetes = (ids: unknown) => !Array.isArray(ids) || ids.length === 0
-  if (sinPaquetes(entrada.moveLineIds) || sinPaquetes(entrada.pickingIds)) throw new ErrorParaOperario('Elegí al menos un paquete.')
+  // An entrega with no lines would be "registered" and then do nothing in Odoo.
+  if (!Array.isArray(entrada.moveLineIds) || entrada.moveLineIds.length === 0) throw new ErrorParaOperario('Elegí al menos un paquete.')
   if (typeof entrada.firmaDataUrl !== 'string' || !FIRMA_PNG.test(entrada.firmaDataUrl)) throw new ErrorParaOperario('Falta la firma.')
   return receptor
 }
 
 /**
+ * What Odoo has waiting for the barco in the delivery type of the almacén: the one read of Odoo this action makes, outside
+ * the queue. When it cannot be read, the operario is told so and the phone keeps everything for a retry.
+ */
+async function leerPendientes(almacen: Almacen, barcoOdooId: number): Promise<LineaEntrega[]> {
+  if (!almacen.odooOutTypeId) {
+    throw new ConfiguracionError('El almacén no tiene tipo de entrega. Refrescá los datos de Odoo.')
+  }
+  try {
+    return await getLineasEntregaPendiente({ outTypeId: almacen.odooOutTypeId, barcoOdooId })
+  } catch (error) {
+    const mensaje = mensajeDeLecturaFallida(error)
+    if (mensaje === null) throw error
+    throw new ErrorParaOperario(mensaje)
+  }
+}
+
+/**
  * Registers the entrega the crew confirmed and queues it. `id` is made up by the phone before its first try and is
  * what makes a retry harmless: the domain saves the entrega once per id, whatever the number of tries.
+ *
+ * Of what the phone sends, the packages are only ids: the entrega takes the ones that Odoo has waiting for the barco in
+ * the active almacén, and the deliveries it touches are the ones those lines are on. A retry of an entrega that was
+ * already saved is not checked again: what it holds may be delivered by now, and the domain does nothing with a second one.
  */
 export async function confirmarEntregaAction(entrada: {
   id: string
   barcoOdooId: number
-  pickingIds: number[]
   moveLineIds: number[]
   receptorNombre: string
   firmaDataUrl: string
 }): Promise<ResultadoAccion> {
   return ejecutarAccion(async () => {
+    validarIdentificadores(entrada)
     const operario = await requireOperarioFromCookies()
     const almacen = await requireAlmacenActivo(operario.id)
     const receptorNombre = validarConfirmacion(entrada)
+
+    // A retry finds its entrega saved: nothing of what it sends is used, so nothing of it is given to the domain.
+    const lineas = await entregaGuardada(entrada.id, almacen.id)
+      ? { moveLineIds: [], pickingIds: [] }
+      : resolverElegidas({ pedidas: entrada.moveLineIds, pendientes: await leerPendientes(almacen, entrada.barcoOdooId) })
+
     // Field by field: the operario and the almacén are the ones of the session, whatever else the client sent along.
     await registrarEntrega({
       id: entrada.id,
       operarioId: operario.id,
       almacenId: almacen.id,
       barcoOdooId: entrada.barcoOdooId,
-      pickingIds: entrada.pickingIds,
-      moveLineIds: entrada.moveLineIds,
+      pickingIds: lineas.pickingIds,
+      moveLineIds: lineas.moveLineIds,
       receptorNombre,
       firmaBase64: entrada.firmaDataUrl,
     })

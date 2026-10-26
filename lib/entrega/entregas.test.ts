@@ -17,7 +17,7 @@ import { publishSync } from '@/lib/queue/publish'
 import { abrirRecepcion, escanearPaquete } from '@/lib/recepcion/recepciones'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
-import { listarBarcosParaEntregar, listarEntregadasHoy, registrarEntrega } from './entregas'
+import { entregaGuardada, listarBarcosParaEntregar, listarEntregadasHoy, registrarEntrega } from './entregas'
 
 let veronika: Operario
 let mb92: Almacen
@@ -441,5 +441,38 @@ describe('listarEntregadasHoy', () => {
 
   it('answers an empty list when nothing was delivered today', async () => {
     expect(await listarEntregadasHoy(mb92.id, AHORA)).toEqual([])
+  })
+})
+
+describe('entregaGuardada', () => {
+  it('knows an entrega that an earlier try saved, whatever became of its sync', async () => {
+    for (const estado of ['confirmada_pendiente_sync', 'sincronizada', 'error'] as const) {
+      const entrada = entradaDeEntrega()
+      await registrarEntrega(entrada)
+      await db.update(sesionesEscaneo).set({ estado }).where(eq(sesionesEscaneo.id, entrada.id))
+
+      expect(await entregaGuardada(entrada.id, mb92.id)).toBe(true)
+    }
+  })
+
+  it('does not know an id nobody saved', async () => {
+    expect(await entregaGuardada(crypto.randomUUID(), mb92.id)).toBe(false)
+  })
+
+  it('does not know an entrega of another almacén: a retry is a retry in the same almacén', async () => {
+    const tgn = await seedAlmacen(db, { prefijo: 'TGN', nombre: 'Port Tarraco (TGN)', odooWarehouseId: 5, odooInTypeId: 21, odooOutTypeId: 22 })
+    const entrada = entradaDeEntrega({ almacenId: tgn.id })
+    await registrarEntrega(entrada)
+
+    expect(await entregaGuardada(entrada.id, mb92.id)).toBe(false)
+    expect(await entregaGuardada(entrada.id, tgn.id)).toBe(true)
+  })
+
+  it('does not take a recepción for an entrega', async () => {
+    const [recepcion] = await db.insert(sesionesEscaneo).values({
+      operarioId: veronika.id, almacenId: mb92.id, barcoOdooId: 673, tipo: 'recepcion', estado: 'confirmada_pendiente_sync', confirmedAt: new Date(),
+    }).returning()
+
+    expect(await entregaGuardada(recepcion.id, mb92.id)).toBe(false)
   })
 })

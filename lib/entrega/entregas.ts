@@ -154,6 +154,19 @@ export async function registrarEntrega(entrada: {
   await publishSync({ sesionId: id })
 }
 
+/**
+ * Whether an entrega with this id was saved in this almacén, in whatever estado: the id of a retry of one that an
+ * earlier try saved. Such a retry has nothing left to check against Odoo, since what the entrega holds may be
+ * delivered by now, and `registrarEntrega` is the one that knows what to do with it.
+ */
+export async function entregaGuardada(id: string, almacenId: number): Promise<boolean> {
+  const existente = await db.query.sesionesEscaneo.findFirst({
+    columns: { id: true },
+    where: and(eq(sesionesEscaneo.id, id), eq(sesionesEscaneo.tipo, 'entrega'), eq(sesionesEscaneo.almacenId, almacenId)),
+  })
+  return existente !== undefined
+}
+
 /** An entrega confirmed today. */
 export interface EntregaDeHoy {
   id: string
