@@ -174,19 +174,45 @@ export async function resumeCourierMoveWithLines(
   return moveId
 }
 
+/** What names an action Odoo answered with: the model it opens, the client tag it runs or, failing both, its type. */
+function nombreDeLaAccion(respuesta: unknown): string | null {
+  if (typeof respuesta !== 'object' || respuesta === null) return null
+  const accion = respuesta as Record<string, unknown>
+  for (const clave of ['res_model', 'tag', 'type']) {
+    const valor = accion[clave]
+    if (typeof valor === 'string' && valor !== '') return valor
+  }
+  return null
+}
+
 /**
- * Confirms, reserves and validates the picking. Odoo answers `true` when the picking is done. Anything else is
- * a wizard it wants answered (a backorder it asks about, say) or a refusal, and nobody is there to answer it:
- * the picking is not done, so that is an error and not a synced recepción.
+ * What to make of an answer to `button_validate` that is not `true`. Odoo answers `true` only when it has nothing
+ * else to say: it can finish `_action_done` and still answer with an action, a report to print (`auto_print_*` on
+ * the operation type) or the reception report, and then the picking is already done. Or it can answer with a wizard
+ * it wants answered (a backorder it asks about, say) or a refusal, and then nobody is there to answer it and the
+ * picking is not done. The answer does not say which, so the state of the picking does, read once: done is a
+ * validation that worked, and anything else is an error and not a synced picking.
+ */
+async function confirmarQueQuedoValidado(pickingId: number, respuesta: unknown): Promise<void> {
+  const [picking] = await odooCall<Array<{ state: string }>>('stock.picking', 'read', {
+    ids: [pickingId],
+    fields: ['state'],
+  })
+  if (picking?.state === 'done') return
+
+  const accion = nombreDeLaAccion(respuesta)
+  throw new RespuestaOdooInesperadaError(accion ? `Odoo pidió confirmar (${accion})` : 'Odoo no validó el albarán.')
+}
+
+/**
+ * Confirms, reserves and validates the picking. Odoo answers `true` when the picking is done, and then nothing
+ * else is asked of it. For any other answer see `confirmarQueQuedoValidado`: the picking may be done all the same.
  */
 export async function validatePicking(pickingId: number): Promise<void> {
   await odooCall('stock.picking', 'action_confirm', { ids: [pickingId] })
   await odooCall('stock.picking', 'action_assign', { ids: [pickingId] })
-  const res = await odooCall<true | { res_model?: string } | false | null>('stock.picking', 'button_validate', { ids: [pickingId] })
-  if (res !== true) {
-    const wizard = typeof res === 'object' && res !== null ? res.res_model : undefined
-    throw new RespuestaOdooInesperadaError(wizard ? `Odoo pidió confirmar (${wizard})` : 'Odoo no validó el albarán.')
-  }
+  const res = await odooCall<unknown>('stock.picking', 'button_validate', { ids: [pickingId] })
+  if (res !== true) await confirmarQueQuedoValidado(pickingId, res)
 }
 
 /**
@@ -313,8 +339,9 @@ export async function getLineasEntregaPendiente(entrada: { outTypeId: number; ba
  * marks the chosen ones as picked and the rest (if there is a rest) as not picked, and validates. With a
  * rest the validation carries `skip_backorder`, so that Odoo makes the backorder instead of opening the
  * wizard that asks whether to; without one there is nothing to skip and it carries no context. If Odoo
- * answers with an action (a wizard it wants confirmed) and not with `true`, nobody is there to answer it:
- * it is an error.
+ * answers with something that is not `true`, the state of the picking says what to make of it (see
+ * `confirmarQueQuedoValidado`): done is a delivery that worked and answered with a report to print; a wizard
+ * it wants confirmed, with the picking not done, is an error because nobody is there to answer it.
  *
  * A chosen line that is not on the picking is not marked, nor counted. Nothing is marked or validated when
  * no chosen line is on the picking: the validation would run with every line unpicked, which nobody asked for.
@@ -346,13 +373,11 @@ export async function validarEntrega(entrada: {
     await odooCall('stock.move.line', 'write', { ids: sinEntregar, vals: { picked: false } })
   }
 
-  const res = await odooCall<true | { res_model: string }>('stock.picking', 'button_validate', {
+  const res = await odooCall<unknown>('stock.picking', 'button_validate', {
     ids: [pickingId],
     ...(sinEntregar.length > 0 ? { context: { skip_backorder: true } } : {}),
   })
-  if (typeof res === 'object' && res !== null) {
-    throw new RespuestaOdooInesperadaError(`Odoo pidió confirmar (${res.res_model})`)
-  }
+  if (res !== true) await confirmarQueQuedoValidado(pickingId, res)
 
   return { quedanEnDeposito: sinEntregar.length }
 }

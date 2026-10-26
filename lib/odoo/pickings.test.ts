@@ -222,6 +222,18 @@ describe('resumeCourierMoveWithLines', () => {
 })
 
 describe('validatePicking', () => {
+  /**
+   * An Odoo that answers each call of `validatePicking`: `true` to confirm and assign, `alValidar` to
+   * `button_validate`, and `estado` when the state of the picking is read afterwards (null: no such picking).
+   */
+  function odooResponde(alValidar: unknown, estado: string | null = null) {
+    vi.mocked(odooCall).mockImplementation((async (_modelo: string, metodo: string) => {
+      if (metodo === 'button_validate') return alValidar
+      if (metodo === 'read') return estado === null ? [] : [{ id: 501, state: estado }]
+      return true
+    }) as never)
+  }
+
   it('runs confirm, assign, and validate in sequence', async () => {
     vi.mocked(odooCall).mockResolvedValue(true)
 
@@ -232,11 +244,37 @@ describe('validatePicking', () => {
     expect(odooCall).toHaveBeenNthCalledWith(3, 'stock.picking', 'button_validate', { ids: [501] })
   })
 
+  it('makes no call beyond the validation when Odoo answers true: the picking is done and there is nothing to ask', async () => {
+    odooResponde(true)
+
+    await validatePicking(501)
+
+    expect(vi.mocked(odooCall).mock.calls.map(([, metodo]) => metodo)).toEqual(['action_confirm', 'action_assign', 'button_validate'])
+  })
+
+  // `button_validate` can finish `_action_done` and still answer with an action instead of `true`: a report to print
+  // (`auto_print_*` on the operation type), or the reception report. The picking is already done by then.
+  it.each([
+    ['a report to print', { type: 'ir.actions.client', tag: 'do_multi_print' }],
+    ['the reception report', { type: 'ir.actions.report', report_name: 'stock.report_reception' }],
+    ['a window action', { type: 'ir.actions.act_window', res_model: 'stock.picking', res_id: 501 }],
+  ])('counts the validation as done when Odoo answers with %s and the picking is done', async (_caso, accion) => {
+    odooResponde(accion, 'done')
+
+    await expect(validatePicking(501)).resolves.toBeUndefined()
+
+    // One read of the state, after the validation, and nothing else.
+    expect(vi.mocked(odooCall).mock.calls.slice(3)).toEqual([['stock.picking', 'read', { ids: [501], fields: ['state'] }]])
+  })
+
+  it.each([[false], [null]])('counts the validation as done when Odoo answers %s and the picking is done', async (respuesta) => {
+    odooResponde(respuesta, 'done')
+
+    await expect(validatePicking(501)).resolves.toBeUndefined()
+  })
+
   it('throws a RespuestaOdooInesperadaError that names the wizard when Odoo asks to confirm something instead of validating', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce({ res_model: 'stock.backorder.confirmation' })
+    odooResponde({ res_model: 'stock.backorder.confirmation' }, 'assigned')
 
     const err = await validatePicking(501).catch((e) => e)
 
@@ -244,16 +282,43 @@ describe('validatePicking', () => {
     expect(err.message).toBe('Odoo pidió confirmar (stock.backorder.confirmation)')
   })
 
-  it.each([[false], [null], [undefined]])('throws when Odoo answers %s and not true', async (respuesta) => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(respuesta)
+  it.each([
+    ['res_model', { type: 'ir.actions.act_window', tag: 'x', res_model: 'stock.immediate.transfer' }, 'stock.immediate.transfer'],
+    ['tag', { type: 'ir.actions.client', tag: 'do_multi_print' }, 'do_multi_print'],
+    ['type', { type: 'ir.actions.report' }, 'ir.actions.report'],
+    ['tag when res_model is false', { type: 'ir.actions.client', res_model: false, tag: 'do_multi_print' }, 'do_multi_print'],
+  ])('names the action by its %s when the picking is not done, and never says undefined', async (_campo, accion, nombre) => {
+    odooResponde(accion, 'assigned')
+
+    const err = await validatePicking(501).catch((e) => e)
+
+    expect(err).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(err.message).toBe(`Odoo pidió confirmar (${nombre})`)
+    expect(err.message).not.toContain('undefined')
+  })
+
+  it('throws, without naming an action, for an action that names nothing and a picking that is not done', async () => {
+    odooResponde({}, 'assigned')
 
     const err = await validatePicking(501).catch((e) => e)
 
     expect(err).toBeInstanceOf(RespuestaOdooInesperadaError)
     expect(err.message).toBe('Odoo no validó el albarán.')
+  })
+
+  it.each([[false], [null], [undefined]])('throws when Odoo answers %s and the picking is not done', async (respuesta) => {
+    odooResponde(respuesta, 'assigned')
+
+    const err = await validatePicking(501).catch((e) => e)
+
+    expect(err).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(err.message).toBe('Odoo no validó el albarán.')
+  })
+
+  it('throws when the picking can not be read back after an action', async () => {
+    odooResponde({ res_model: 'stock.backorder.confirmation' }, null)
+
+    await expect(validatePicking(501)).rejects.toBeInstanceOf(RespuestaOdooInesperadaError)
   })
 })
 
@@ -469,10 +534,13 @@ describe('getLineasEntregaPendiente', () => {
 })
 
 describe('validarEntrega', () => {
-  /** An Odoo answer for each of the calls `validarEntrega` makes: the picking it reads, and what `button_validate` returns. */
-  function odooResponde(lineasDelPicking: number[], alValidar: unknown = true) {
+  /**
+   * An Odoo answer for each of the calls `validarEntrega` makes: the picking it reads (with `estado` as its state,
+   * which is only looked at after an answer that is not `true`), and what `button_validate` returns.
+   */
+  function odooResponde(lineasDelPicking: number[], alValidar: unknown = true, estado = 'assigned') {
     vi.mocked(odooCall).mockImplementation((async (_modelo: string, metodo: string) => {
-      if (metodo === 'read') return [{ id: 700, move_line_ids: lineasDelPicking }]
+      if (metodo === 'read') return [{ id: 700, move_line_ids: lineasDelPicking, state: estado }]
       if (metodo === 'button_validate') return alValidar
       return true
     }) as never)
@@ -525,7 +593,7 @@ describe('validarEntrega', () => {
     expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [5] })).toEqual({ quedanEnDeposito: 4 })
   })
 
-  it('throws when Odoo answers with a wizard instead of true: a RespuestaOdooInesperadaError that names it', async () => {
+  it('throws when Odoo answers with a wizard instead of true and the picking is not done: a RespuestaOdooInesperadaError that names it', async () => {
     odooResponde([1, 2], {
       type: 'ir.actions.act_window',
       res_model: 'stock.backorder.confirmation',
@@ -537,6 +605,17 @@ describe('validarEntrega', () => {
 
     expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
     expect(error.message).toBe('Odoo pidió confirmar (stock.backorder.confirmation)')
+  })
+
+  it('throws for the backorder wizard that skip_backorder was meant to avoid, as it did before: nothing was validated', async () => {
+    odooResponde([1, 2, 3], { type: 'ir.actions.act_window', res_model: 'stock.backorder.confirmation' }, 'assigned')
+
+    const error = await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(error.message).toBe('Odoo pidió confirmar (stock.backorder.confirmation)')
+    // It validated with skip_backorder, as ever, and only read the state afterwards.
+    expect(llamadas().map(([, metodo]) => metodo)).toEqual(['read', 'write', 'write', 'button_validate', 'read'])
   })
 
   it('also throws for a wizard when it validates plainly', async () => {
@@ -582,5 +661,53 @@ describe('validarEntrega', () => {
     await expect(validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] })).rejects.toThrow('Odoo se cayó')
 
     expect(llamadas().map(([, metodo]) => metodo)).toEqual(['read', 'write'])
+  })
+
+  // `auto_print_delivery_slip` is common on the delivery types: Odoo finishes the validation and answers with the
+  // action that prints the slip. The picking is done by then, and the lines it delivered are on it.
+  it.each([
+    ['with some lines staying', [1, 2, 3], [1, 2], 1, { context: { skip_backorder: true } }],
+    ['with every line chosen', [1, 2], [1, 2], 0, {}],
+  ])('counts the delivery as validated when Odoo answers with a report to print and the picking is done, %s', async (_caso, lineas, elegidas, quedan, contexto) => {
+    odooResponde(lineas, { type: 'ir.actions.client', tag: 'do_multi_print' }, 'done')
+
+    expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: elegidas })).toEqual({ quedanEnDeposito: quedan })
+
+    // The validation is what it always is; the only thing added is one read of the state after it.
+    const metodos = llamadas().map(([, metodo]) => metodo)
+    expect(metodos.slice(-2)).toEqual(['button_validate', 'read'])
+    expect(llamadas().at(-2)).toEqual(['stock.picking', 'button_validate', { ids: [700], ...contexto }])
+    expect(llamadas().at(-1)).toEqual(['stock.picking', 'read', { ids: [700], fields: ['state'] }])
+  })
+
+  it('makes no read after the validation when Odoo answers true', async () => {
+    odooResponde([1, 2])
+
+    await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1, 2] })
+
+    expect(llamadas().filter(([, metodo]) => metodo === 'read')).toHaveLength(1) // the one before marking the lines
+    expect(llamadas().at(-1)?.[1]).toBe('button_validate')
+  })
+
+  it.each([
+    ['a report to print', { type: 'ir.actions.client', tag: 'do_multi_print' }, 'do_multi_print'],
+    ['an action with no model nor tag', { type: 'ir.actions.report' }, 'ir.actions.report'],
+  ])('throws, naming the action and never saying undefined, when Odoo answers with %s and the picking is not done', async (_caso, accion, nombre) => {
+    odooResponde([1, 2], accion, 'assigned')
+
+    const error = await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(error.message).toBe(`Odoo pidió confirmar (${nombre})`)
+  })
+
+  it('throws when Odoo answers false and the picking is not done, and counts it as validated when it is done', async () => {
+    odooResponde([1], false, 'assigned')
+    const error = await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] }).catch((e) => e)
+    expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(error.message).toBe('Odoo no validó el albarán.')
+
+    odooResponde([1], false, 'done')
+    expect(await validarEntrega({ pickingId: 700, moveLineIdsElegidas: [1] })).toEqual({ quedanEnDeposito: 0 })
   })
 })

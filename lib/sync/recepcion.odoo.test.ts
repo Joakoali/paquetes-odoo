@@ -30,6 +30,8 @@ const odoo = {
   estadoDelPicking: 'draft',
   /** What `button_validate` answers: `true` when it validated, an action when it wants something confirmed. */
   respuestaDeValidar: true as unknown,
+  /** The picking ends up done although the answer is not `true`: Odoo finished and answered with a report to print. */
+  validaAunqueResponda: false,
   movimientos: [] as Movimiento[],
   lineas: [] as Linea[],
   siguienteId: 1000,
@@ -82,7 +84,7 @@ function ejecuta(modelo: string, metodo: string, params: Record<string, unknown>
       return [Object.fromEntries(['id', ...(params.fields as string[])].map((campo) => [campo, campos[campo]]))]
     }
     if (metodo === 'button_validate') {
-      if (odoo.respuestaDeValidar === true) odoo.estadoDelPicking = 'done'
+      if (odoo.respuestaDeValidar === true || odoo.validaAunqueResponda) odoo.estadoDelPicking = 'done'
       return odoo.respuestaDeValidar
     }
     return true // action_confirm, action_assign, message_post, write
@@ -129,7 +131,7 @@ beforeEach(async () => {
   vi.resetAllMocks()
   await resetTestDb(db as unknown as TestDb)
   Object.assign(odoo, {
-    pickingId: 0, estadoDelPicking: 'draft', respuestaDeValidar: true,
+    pickingId: 0, estadoDelPicking: 'draft', respuestaDeValidar: true, validaAunqueResponda: false,
     movimientos: [], lineas: [], siguienteId: 1000, fallo: null,
   })
   vi.stubEnv('ODOO_FIELD_BARCO', 'x_studio_barco')
@@ -234,9 +236,48 @@ describe('a retry after the lines of a move failed to arrive', () => {
   })
 })
 
+describe('a picking that Odoo validated and answered with an action', () => {
+  // `auto_print_*` on the operation type, or `auto_show_reception_report`: `button_validate` finishes the work and
+  // answers with the action that prints or shows it, instead of `true`. The picking is done.
+  it.each([
+    ['a report to print', { type: 'ir.actions.client', tag: 'do_multi_print' }],
+    ['the reception report', { type: 'ir.actions.act_window', res_model: 'stock.reception.report' }],
+  ])('syncs the recepción, with the note and Recibido por, when the answer is %s and the picking is done', async (_caso, accion) => {
+    const sesion = await crearRecepcion(['T1', 'T2'])
+    odoo.respuestaDeValidar = accion
+    odoo.validaAunqueResponda = true
+
+    await syncRecepcionSession(sesion.id)
+
+    expect(odoo.estadoDelPicking).toBe('done')
+    expect(await filaSesion(sesion.id)).toMatchObject({
+      estado: 'sincronizada', ultimoError: null, ultimoErrorTipo: null, odooPickingRef: PICKING_REF,
+    })
+    const llamadas = vi.mocked(odooCall).mock.calls
+    expect(llamadas.filter(([, metodo]) => metodo === 'message_post')).toHaveLength(1)
+    expect(llamadas.filter(([modelo, metodo]) => modelo === 'stock.picking' && metodo === 'write')).toEqual([
+      ['stock.picking', 'write', { ids: [odoo.pickingId], vals: { x_studio_recibido_por_2: 'Veronika' } }],
+    ])
+    // The state is read once before validating, and once more because the answer was not `true`.
+    expect(llamadas.filter(([modelo, metodo, params]) => modelo === 'stock.picking' && metodo === 'read'
+      && JSON.stringify((params as { fields: string[] }).fields) === '["state"]')).toHaveLength(2)
+  })
+
+  it('asks for the state of the picking only once, before validating, when Odoo answers true', async () => {
+    const sesion = await crearRecepcion(['T1'])
+
+    await syncRecepcionSession(sesion.id)
+
+    const lecturasDelEstado = vi.mocked(odooCall).mock.calls.filter(([modelo, metodo, params]) =>
+      modelo === 'stock.picking' && metodo === 'read' && JSON.stringify((params as { fields: string[] }).fields) === '["state"]')
+    expect(lecturasDelEstado).toHaveLength(1)
+  })
+})
+
 describe('a picking that does not end up done', () => {
   it.each([
     ['an action that asks to confirm something', { res_model: 'stock.backorder.confirmation' }],
+    ['an action that prints, with the picking not done', { type: 'ir.actions.client', tag: 'do_multi_print' }],
     ['false', false],
     ['nothing', null],
   ])('ends in error, not synced, when Odoo answers to the validation with %s', async (_caso, respuesta) => {
