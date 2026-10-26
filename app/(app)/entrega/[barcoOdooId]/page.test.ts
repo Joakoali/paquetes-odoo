@@ -118,11 +118,61 @@ describe('EntregaBarcoPage', () => {
       expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
     })
 
-    it('is not found when no barco of the cache has that id, and nothing is read from Odoo', async () => {
+    it('is not found when Odoo has no lines for the barco and the cache does not know it either', async () => {
+      vi.mocked(getLineasEntregaPendiente).mockResolvedValue([])
+
       await expect(pagina('999')).rejects.toThrow('NEXT_NOT_FOUND')
 
-      expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
-      expect(contarSinEnviarPorBarco).not.toHaveBeenCalled()
+      // The cache is not what says whether there is a barco: Odoo is asked first.
+      expect(getLineasEntregaPendiente).toHaveBeenCalledWith({ outTypeId: 2, barcoOdooId: 999 })
+    })
+
+    it('opens a barco that is not in the cache when Odoo has lines waiting for it, named by its id like the list of barcos does', async () => {
+      // Created in Odoo after the last refresh of the cache, or archived since: the list of barcos shows it all the same.
+      const flujo = buscar(await pagina('999'), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ barcoOdooId: 999, barcoNombre: 'Barco #999', lineas })
+    })
+
+    it('opens a barco that is not in the cache when all the lines Odoo has for it are held: they are there, and on their way', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      await entregaCon(veronikaId, [11, 12, 13], 'confirmada_pendiente_sync', { barcoOdooId: 999 })
+
+      const flujo = buscar(await pagina('999'), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ barcoNombre: 'Barco #999', lineas: [], enviandose: 3 })
+    })
+
+    it('opens a barco that is not in the cache and has no lines in Odoo but has packages received and not sent: the list of barcos shows it', async () => {
+      vi.mocked(getLineasEntregaPendiente).mockResolvedValue([])
+      vi.mocked(contarSinEnviarPorBarco).mockResolvedValue(new Map([[999, 2]]))
+
+      const flujo = buscar(await pagina('999'), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ barcoNombre: 'Barco #999', lineas: [], sinEnviar: 2 })
+    })
+
+    it('prefers the name of the cache to the placeholder', async () => {
+      const flujo = buscar(await pagina('673'), EntregaFlow)
+
+      expect(flujo?.props.barcoNombre).toBe('MAYANQUEEN')
+    })
+
+    it('opens a barco of the cache that Odoo has nothing waiting for: it says so, and is not a page that does not exist', async () => {
+      vi.mocked(getLineasEntregaPendiente).mockResolvedValue([])
+
+      const flujo = buscar(await pagina('673'), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ barcoNombre: 'MAYANQUEEN', lineas: [] })
+    })
+
+    it('says that Odoo could not be read, under the placeholder name, for a barco the cache does not know: nothing says it does not exist', async () => {
+      vi.mocked(getLineasEntregaPendiente).mockRejectedValue(new OdooError({ status: 502, data: '<html>Bad gateway</html>' }))
+
+      const html = renderToStaticMarkup((await pagina('999')) as ReactElement)
+
+      expect(html).toContain('Barco #999')
+      expect(html).toContain(LECTURA_DE_ODOO_FALLIDA)
     })
 
     it('opens a barco that is no longer active in the cache: it may still have deliveries waiting', async () => {

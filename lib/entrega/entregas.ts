@@ -8,6 +8,14 @@ import { getBarcosConEntregaPendiente } from '../odoo/pickings'
 import { publishSync } from '../queue/publish'
 import { contarSinEnviarPorBarco } from '../recepcion/recepciones'
 
+/**
+ * What a barco is called: its name in the cache, or, for one the cache does not know (created in Odoo since the last
+ * refresh, or archived), the placeholder that the lists and the recepciones use.
+ */
+export function nombreDelBarco(nombre: string | null | undefined, barcoOdooId: number): string {
+  return nombre ?? `Barco #${barcoOdooId}`
+}
+
 /** A barco of the delivery list. */
 export interface BarcoParaEntregar {
   barcoOdooId: number
@@ -65,8 +73,7 @@ export async function listarBarcosParaEntregar(almacen: Pick<Almacen, 'id' | 'od
     for (const [barcoOdooId, cantidad] of soloSinEnviar) {
       barcos.push({
         barcoOdooId,
-        // The same placeholder the recepciones use for a barco the cache does not know.
-        barcoNombre: nombres.get(barcoOdooId) ?? `Barco #${barcoOdooId}`,
+        barcoNombre: nombreDelBarco(nombres.get(barcoOdooId), barcoOdooId),
         paquetes: 0,
         desde: null,
         sinEnviar: cantidad,
@@ -242,8 +249,7 @@ export async function listarEntregadasHoy(almacenId: number, ahora: Date = new D
 
   return filas.map((fila) => ({
     id: fila.id,
-    // The same placeholder the recepciones use for a barco the cache does not know.
-    barcoNombre: fila.barcoNombre ?? `Barco #${fila.barcoOdooId}`,
+    barcoNombre: nombreDelBarco(fila.barcoNombre, fila.barcoOdooId),
     paquetes: fila.lineas?.length ?? 0,
     receptorNombre: fila.receptorNombre ?? '',
     estado: estadoDeEntrega(fila.estado, fila.ultimoError),

@@ -17,7 +17,9 @@ import { publishSync } from '@/lib/queue/publish'
 import { abrirRecepcion, escanearPaquete } from '@/lib/recepcion/recepciones'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
-import { entregaGuardada, listarBarcosParaEntregar, listarEntregadasHoy, moveLineIdsRetenidas, registrarEntrega } from './entregas'
+import {
+  entregaGuardada, listarBarcosParaEntregar, listarEntregadasHoy, moveLineIdsRetenidas, nombreDelBarco, registrarEntrega,
+} from './entregas'
 
 let veronika: Operario
 let mb92: Almacen
@@ -564,5 +566,16 @@ describe('moveLineIdsRetenidas', () => {
 
   it('holds nothing when there is no entrega', async () => {
     expect(await retenidas()).toEqual(new Set())
+  })
+})
+
+describe('nombreDelBarco', () => {
+  it('is the name the cache has', () => {
+    expect(nombreDelBarco('MAYANQUEEN', 673)).toBe('MAYANQUEEN')
+  })
+
+  it('is the placeholder the lists and the recepciones use for a barco the cache does not know', () => {
+    expect(nombreDelBarco(null, 999)).toBe('Barco #999')
+    expect(nombreDelBarco(undefined, 999)).toBe('Barco #999')
   })
 })

@@ -5,7 +5,7 @@ import { db } from '@/db/client'
 import { barcosCache, type Almacen } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
-import { moveLineIdsRetenidas } from '@/lib/entrega/entregas'
+import { moveLineIdsRetenidas, nombreDelBarco } from '@/lib/entrega/entregas'
 import { separarRetenidas } from '@/lib/entrega/lineas'
 import { ConfiguracionError, ErrorParaOperario } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
@@ -25,13 +25,14 @@ function idDeLaDireccion(texto: string): number | null {
 
 /**
  * What Odoo has waiting for the barco in the almacén and no entrega on its way to Odoo has taken, how many of its packages
- * are taken like that, and how many are received and not sent, or what to tell the operario when they could not be read. Only a reading that failed is told: a bug goes on to the error screen
+ * are taken like that, whether Odoo has any package waiting at all, and how many are received and not sent, or what to tell
+ * the operario when they could not be read. Only a reading that failed is told: a bug goes on to the error screen
  * of the app.
  */
 async function leerEntrega(
   almacen: Almacen,
   barcoOdooId: number,
-): Promise<{ lineas: LineaEntrega[]; enviandose: number; sinEnviar: number } | { mensaje: string }> {
+): Promise<{ lineas: LineaEntrega[]; enviandose: number; hayEnOdoo: boolean; sinEnviar: number } | { mensaje: string }> {
   try {
     if (!almacen.odooOutTypeId) {
       throw new ConfiguracionError('El almacén no tiene tipo de entrega. Refrescá los datos de Odoo.')
@@ -44,7 +45,7 @@ async function leerEntrega(
     // Odoo goes on listing the packages of an entrega until the worker validates it, about a minute after it was confirmed:
     // they are not offered again meanwhile, or a second entrega of them would be one tap away.
     const { disponibles, enviandose } = separarRetenidas(pendientes, retenidas)
-    return { lineas: disponibles, enviandose, sinEnviar: sinEnviar.get(barcoOdooId) ?? 0 }
+    return { lineas: disponibles, enviandose, hayEnOdoo: pendientes.length > 0, sinEnviar: sinEnviar.get(barcoOdooId) ?? 0 }
   } catch (error) {
     const mensaje = mensajeDeLecturaFallida(error)
     if (mensaje === null) throw error
@@ -55,7 +56,7 @@ async function leerEntrega(
 /**
  * Steps 2 and 3 of the delivery, on the phone: the packages Odoo has waiting for the barco in the almacén the operario is
  * working in (a live reading of Odoo), the choice of which to hand over, and the name and signature of the crew. The name
- * of the barco is the one of the cache, with no call to Odoo.
+ * of the barco is the one of the cache, or, for one the cache does not know, the placeholder the list of barcos uses.
  */
 export default async function EntregaBarcoPage({ params }: { params: Promise<{ barcoOdooId: string }> }) {
   // The layout sends whoever has no valid session to the login, but it does not render again when the operario
@@ -79,17 +80,20 @@ export default async function EntregaBarcoPage({ params }: { params: Promise<{ b
     throw error
   }
 
-  // Not only the active barcos: one that is gone from Odoo's list of projects may still have deliveries waiting.
-  const barco = await db.query.barcosCache.findFirst({ columns: { nombre: true }, where: eq(barcosCache.odooId, barcoOdooId) })
-  if (!barco) notFound()
+  // The list of barcos is read straight from Odoo, so the page cannot depend on the cache to open one: a barco created since
+  // the last refresh, or archived, may have deliveries waiting. Not only the active barcos of the cache either.
+  const [lectura, enCache] = await Promise.all([
+    leerEntrega(almacen, barcoOdooId),
+    db.query.barcosCache.findFirst({ columns: { nombre: true }, where: eq(barcosCache.odooId, barcoOdooId) }),
+  ])
+  const barcoNombre = nombreDelBarco(enCache?.nombre, barcoOdooId)
 
-  const lectura = await leerEntrega(almacen, barcoOdooId)
   if ('mensaje' in lectura) {
     return (
       <main className="page">
         <header className="barco-cabecera">
           <Link href="/entrega" className="btn-link">‹ Entrega</Link>
-          <h1 className="barco-nombre">{barco.nombre}</h1>
+          <h1 className="barco-nombre">{barcoNombre}</h1>
           <span className="barco-almacen">{almacen.prefijo}</span>
         </header>
 
@@ -101,6 +105,10 @@ export default async function EntregaBarcoPage({ params }: { params: Promise<{ b
     )
   }
 
+  // There is no such barco only when nothing says there is one: Odoo has no package waiting for it, nobody has received
+  // packages of it that are still to be sent, and the cache does not know it.
+  if (!enCache && !lectura.hayEnOdoo && lectura.sinEnviar === 0) notFound()
+
   // The key is the lines it was given: if they change (the packages that were sent come in a minute later), the choice
   // starts again from "all of them", and a line that is new is not left out of it without anybody having said so.
   return (
@@ -109,7 +117,7 @@ export default async function EntregaBarcoPage({ params }: { params: Promise<{ b
       <EntregaFlow
         key={lectura.lineas.map((linea) => linea.moveLineId).join(',')}
         barcoOdooId={barcoOdooId}
-        barcoNombre={barco.nombre}
+        barcoNombre={barcoNombre}
         almacenPrefijo={almacen.prefijo}
         lineas={lectura.lineas}
         sinEnviar={lectura.sinEnviar}
