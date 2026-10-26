@@ -38,6 +38,17 @@ describe('clasificarError', () => {
       tipo: 'conexion',
     },
 
+    // Odoo does not accept the credentials, or the user they belong to may not do it: somebody with access to the
+    // setup (the API key, the user's rights) has to fix it, and sending it again gets the same answer.
+    { label: 'OdooError 401', err: new OdooError({ status: 401, data: null }), tipo: 'configuracion' },
+    { label: 'OdooError 403', err: new OdooError({ status: 403, data: null }), tipo: 'configuracion' },
+    {
+      label: 'OdooError 403 AccessError',
+      err: new OdooError({ status: 403, data: { name: 'odoo.exceptions.AccessError', message: 'No podés crear stock.move' } }),
+      tipo: 'configuracion',
+    },
+    { label: 'OdooError 401 with an HTML page', err: new OdooError({ status: 401, data: '<html>Unauthorized</html>' }), tipo: 'configuracion' },
+
     // Odoo answered and said no: sending the same thing again gets the same answer.
     {
       label: 'OdooError 422 ValidationError',

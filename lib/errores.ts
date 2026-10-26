@@ -72,14 +72,27 @@ function isTransient(err: OdooError): boolean {
 }
 
 /**
+ * Odoo refused the credentials (401: the API key is wrong or was revoked) or the user they belong to may not do
+ * what was asked (403: it lacks the access rights). Nothing in the sesión can fix that: whoever looks after the
+ * Odoo user and the key has to, so it is a matter of configuration like a missing env var.
+ */
+function isRefusedAccess(err: OdooError): boolean {
+  return err.status === 401 || err.status === 403
+}
+
+/**
  * Tells a failed Odoo sync that a retry can fix (`conexion`) from one that
- * needs a person: an admin (`configuracion`) or someone reading what Odoo
- * said (`odoo`).
+ * needs a person: an admin (`configuracion`: a setup that is missing, or
+ * credentials or rights that Odoo refuses) or someone reading what Odoo said
+ * (`odoo`).
  */
 export function clasificarError(err: unknown): ErrorTipo {
   if (err instanceof ConfiguracionError) return 'configuracion'
 
-  if (err instanceof OdooError) return isTransient(err) ? 'conexion' : 'odoo'
+  if (err instanceof OdooError) {
+    if (isRefusedAccess(err)) return 'configuracion'
+    return isTransient(err) ? 'conexion' : 'odoo'
+  }
 
   if (err instanceof Error) {
     // fetch() rejects with a TimeoutError when our AbortSignal.timeout fires (AbortError for a

@@ -75,6 +75,19 @@ describe('registrarFalloSync', () => {
     expect(await estadoDe(s.id)).toMatchObject({ estado: 'error', ultimoErrorTipo: 'configuracion' })
   })
 
+  it.each([401, 403])('an Odoo %i is a matter of configuration for the admin, and final on the first attempt', async (status) => {
+    const s = await seedSesion()
+
+    const r = await registrarFalloSync({
+      sesionId: s.id,
+      error: new OdooError({ status, data: { name: 'odoo.exceptions.AccessError', message: 'No tenés acceso' } }),
+      reintentosHechos: 0,
+    })
+
+    expect(r).toEqual({ final: true, tipo: 'configuracion' })
+    expect(await estadoDe(s.id)).toMatchObject({ estado: 'error', ultimoErrorTipo: 'configuracion' })
+  })
+
   it('an Odoo rejection is final on the first attempt', async () => {
     const s = await seedSesion()
     const error = new OdooError({ status: 422, data: { name: 'odoo.exceptions.ValidationError', message: 'x' } })
