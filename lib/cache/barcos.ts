@@ -14,6 +14,20 @@ export interface BarcoOpcion {
   etiqueta: string
 }
 
+/**
+ * What each barco of a list shows, in the order of the list: its name, followed by its Odoo id (`H3 · #1234`) when
+ * another barco of the same list has the same name, whatever the case, so that they can be told apart. A name that
+ * is alone in the list is shown as it is. The search of barcos and the delivery list share this rule.
+ */
+export function etiquetasDeBarcos(barcos: ReadonlyArray<{ odooId: number; nombre: string }>): string[] {
+  const repeticiones = new Map<string, number>()
+  for (const { nombre } of barcos) {
+    const clave = nombre.toLowerCase()
+    repeticiones.set(clave, (repeticiones.get(clave) ?? 0) + 1)
+  }
+  return barcos.map(({ odooId, nombre }) => ((repeticiones.get(nombre.toLowerCase()) ?? 0) > 1 ? `${nombre} · #${odooId}` : nombre))
+}
+
 /** What the operator types is literal text: `%` and `_` are not wildcards, and `\` is LIKE's escape character. */
 function escaparLike(texto: string): string {
   return texto.replace(/[\\%_]/g, '\\$&')
@@ -29,14 +43,6 @@ export async function searchBarcos(query: string): Promise<BarcoOpcion[]> {
     .orderBy(asc(sql`lower(${barcosCache.nombre})`), asc(barcosCache.nombre), asc(barcosCache.odooId))
     .limit(BUSQUEDA_BARCOS_LIMITE)
 
-  const repeticiones = new Map<string, number>()
-  for (const { nombre } of filas) {
-    const clave = nombre.toLowerCase()
-    repeticiones.set(clave, (repeticiones.get(clave) ?? 0) + 1)
-  }
-  return filas.map(({ odooId, nombre }) => ({
-    odooId,
-    nombre,
-    etiqueta: (repeticiones.get(nombre.toLowerCase()) ?? 0) > 1 ? `${nombre} · #${odooId}` : nombre,
-  }))
+  const etiquetas = etiquetasDeBarcos(filas)
+  return filas.map(({ odooId, nombre }, posicion) => ({ odooId, nombre, etiqueta: etiquetas[posicion] }))
 }

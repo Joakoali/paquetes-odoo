@@ -14,6 +14,7 @@ import { registrarAuditoria } from '@/lib/audit'
 import { ConfiguracionError } from '@/lib/errores'
 import { getBarcosConEntregaPendiente, type BarcoConEntrega } from '@/lib/odoo/pickings'
 import { publishSync } from '@/lib/queue/publish'
+import { searchBarcos } from '@/lib/cache/barcos'
 import { abrirRecepcion, escanearPaquete } from '@/lib/recepcion/recepciones'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
@@ -41,6 +42,9 @@ function odooTiene(...barcos: BarcoConEntrega[]) {
 }
 
 const mayanqueen: BarcoConEntrega = { barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', paquetes: 3, desde: new Date('2026-10-14T08:00:00Z') }
+/** What each barco of the list says for itself: its name, as long as no other barco of the list has it. */
+const conEtiqueta = (barco: BarcoConEntrega, extra: { sinEnviar?: number; barcoEtiqueta?: string } = {}) =>
+  ({ ...barco, barcoEtiqueta: extra.barcoEtiqueta ?? barco.barcoNombre, sinEnviar: extra.sinEnviar ?? 0 })
 
 let paquetesEscaneados = 0
 
@@ -57,7 +61,7 @@ describe('listarBarcosParaEntregar', () => {
   it('lists the barcos Odoo has a delivery waiting for, with nothing unsent', async () => {
     odooTiene(mayanqueen)
 
-    expect(await listarBarcosParaEntregar(mb92)).toEqual([{ ...mayanqueen, sinEnviar: 0 }])
+    expect(await listarBarcosParaEntregar(mb92)).toEqual([conEtiqueta(mayanqueen)])
   })
 
   it('asks Odoo for the delivery type of the almacén, not the reception one', async () => {
@@ -73,7 +77,7 @@ describe('listarBarcosParaEntregar', () => {
     odooTiene(mayanqueen)
     await recibirSinEnviar(mb92, 673, 2)
 
-    expect(await listarBarcosParaEntregar(mb92)).toEqual([{ ...mayanqueen, sinEnviar: 2 }])
+    expect(await listarBarcosParaEntregar(mb92)).toEqual([conEtiqueta(mayanqueen, { sinEnviar: 2 })])
   })
 
   it('adds barcos that only have unsent packages, with 0 packages, no date and the name from the cache', async () => {
@@ -81,8 +85,8 @@ describe('listarBarcosParaEntregar', () => {
     await recibirSinEnviar(mb92, 674, 3)
 
     expect(await listarBarcosParaEntregar(mb92)).toEqual([
-      { ...mayanqueen, sinEnviar: 0 },
-      { barcoOdooId: 674, barcoNombre: 'MAYANQUEENIV', paquetes: 0, desde: null, sinEnviar: 3 },
+      conEtiqueta(mayanqueen),
+      { barcoOdooId: 674, barcoNombre: 'MAYANQUEENIV', barcoEtiqueta: 'MAYANQUEENIV', paquetes: 0, desde: null, sinEnviar: 3 },
     ])
   })
 
@@ -91,7 +95,7 @@ describe('listarBarcosParaEntregar', () => {
     await recibirSinEnviar(mb92, 673, 1)
 
     expect(await listarBarcosParaEntregar(mb92)).toEqual([
-      { barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', paquetes: 0, desde: null, sinEnviar: 1 },
+      { barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', barcoEtiqueta: 'MAYANQUEEN', paquetes: 0, desde: null, sinEnviar: 1 },
     ])
   })
 
@@ -100,7 +104,7 @@ describe('listarBarcosParaEntregar', () => {
     await recibirSinEnviar(mb92, 999, 1)
 
     expect(await listarBarcosParaEntregar(mb92)).toEqual([
-      { barcoOdooId: 999, barcoNombre: 'Barco #999', paquetes: 0, desde: null, sinEnviar: 1 },
+      { barcoOdooId: 999, barcoNombre: 'Barco #999', barcoEtiqueta: 'Barco #999', paquetes: 0, desde: null, sinEnviar: 1 },
     ])
   })
 
@@ -110,7 +114,65 @@ describe('listarBarcosParaEntregar', () => {
     await recibirSinEnviar(tgn, 673, 4)
     await recibirSinEnviar(tgn, 674, 1)
 
-    expect(await listarBarcosParaEntregar(mb92)).toEqual([{ ...mayanqueen, sinEnviar: 0 }])
+    expect(await listarBarcosParaEntregar(mb92)).toEqual([conEtiqueta(mayanqueen)])
+  })
+
+  describe('two barcos with the same name', () => {
+    const h3a: BarcoConEntrega = { barcoOdooId: 1234, barcoNombre: 'H3', paquetes: 2, desde: new Date('2026-10-14T08:00:00Z') }
+    const h3b: BarcoConEntrega = { barcoOdooId: 1301, barcoNombre: 'H3', paquetes: 5, desde: new Date('2026-10-16T08:00:00Z') }
+
+    it('tells them apart with the Odoo id, and leaves a barco with a name of its own as it is', async () => {
+      odooTiene(h3a, mayanqueen, h3b)
+
+      const barcos = await listarBarcosParaEntregar(mb92)
+
+      // Oldest first: the two of the 14th go by name (H3 before MAYANQUEEN), then the one of the 16th.
+      expect(barcos.map((barco) => [barco.barcoOdooId, barco.barcoEtiqueta])).toEqual([
+        [1234, 'H3 · #1234'],
+        [673, 'MAYANQUEEN'],
+        [1301, 'H3 · #1301'],
+      ])
+      // The name is still the name: the label is only what the list shows.
+      expect(barcos.map((barco) => barco.barcoNombre)).toEqual(['H3', 'MAYANQUEEN', 'H3'])
+    })
+
+    it('does not mind the case of the name, like the search of barcos', async () => {
+      odooTiene(h3a, { ...h3b, barcoNombre: 'h3' })
+
+      expect((await listarBarcosParaEntregar(mb92)).map((barco) => barco.barcoEtiqueta)).toEqual(['H3 · #1234', 'h3 · #1301'])
+    })
+
+    it('tells apart a barco Odoo has a delivery for from one that only has unsent packages, which has its name in the cache', async () => {
+      await seedBarco(db, { odooId: 900, nombre: 'H3' })
+      odooTiene(h3a)
+      await recibirSinEnviar(mb92, 900, 1)
+
+      const barcos = await listarBarcosParaEntregar(mb92)
+
+      expect(barcos.map((barco) => [barco.barcoOdooId, barco.barcoEtiqueta])).toEqual([
+        [1234, 'H3 · #1234'],
+        [900, 'H3 · #900'],
+      ])
+    })
+
+    it('does not add the id when the other barco with that name is not on the list', async () => {
+      await seedBarco(db, { odooId: 900, nombre: 'H3' }) // in the cache, but with nothing to deliver
+      odooTiene(h3a)
+
+      expect((await listarBarcosParaEntregar(mb92)).map((barco) => barco.barcoEtiqueta)).toEqual(['H3'])
+    })
+
+    it('labels them the way the search of barcos does: the same rule, not a second one', async () => {
+      await seedBarco(db, { odooId: 1234, nombre: 'H3' })
+      await seedBarco(db, { odooId: 1301, nombre: 'H3' })
+      odooTiene(h3a, h3b)
+
+      const enLaLista = (await listarBarcosParaEntregar(mb92)).map((barco) => barco.barcoEtiqueta).sort()
+      const enLaBusqueda = (await searchBarcos('H3')).map((barco) => barco.etiqueta).sort()
+
+      expect(enLaLista).toEqual(['H3 · #1234', 'H3 · #1301'])
+      expect(enLaLista).toEqual(enLaBusqueda)
+    })
   })
 
   it('orders by the date the oldest delivery has been waiting since, and puts the barcos with no date last', async () => {

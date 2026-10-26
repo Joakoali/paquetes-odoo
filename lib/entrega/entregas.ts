@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, ne } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { barcosCache, sesionesEscaneo, type Almacen, type SesionEscaneo } from '../../db/schema'
 import { registrarAuditoria } from '../audit'
+import { etiquetasDeBarcos } from '../cache/barcos'
 import { ConfiguracionError } from '../errores'
 import { inicioDeHoy } from '../fechas'
 import { getBarcosConEntregaPendiente } from '../odoo/pickings'
@@ -20,6 +21,11 @@ export function nombreDelBarco(nombre: string | null | undefined, barcoOdooId: n
 export interface BarcoParaEntregar {
   barcoOdooId: number
   barcoNombre: string
+  /**
+   * What the list shows for the barco: its name, with the Odoo id after it when another barco of the list has the
+   * same name (there can be several "H3"), by the same rule as the search of barcos.
+   */
+  barcoEtiqueta: string
   /** The packages Odoo has waiting for delivery. 0 for a barco whose packages are all still unsent. */
   paquetes: number
   /** Since when the oldest of those deliveries has been waiting. Null when Odoo has none for the barco. */
@@ -58,7 +64,11 @@ export async function listarBarcosParaEntregar(almacen: Pick<Almacen, 'id' | 'od
     contarSinEnviarPorBarco(almacen.id),
   ])
 
-  const barcos: BarcoParaEntregar[] = enOdoo.map((barco) => ({ ...barco, sinEnviar: sinEnviar.get(barco.barcoOdooId) ?? 0 }))
+  // Without the label yet: it is told when the list is complete, since it depends on the names of all of it.
+  const barcos: Array<Omit<BarcoParaEntregar, 'barcoEtiqueta'>> = enOdoo.map((barco) => ({
+    ...barco,
+    sinEnviar: sinEnviar.get(barco.barcoOdooId) ?? 0,
+  }))
 
   const yaEstan = new Set(barcos.map((barco) => barco.barcoOdooId))
   const soloSinEnviar = [...sinEnviar].filter(([barcoOdooId]) => !yaEstan.has(barcoOdooId))
@@ -81,7 +91,9 @@ export async function listarBarcosParaEntregar(almacen: Pick<Almacen, 'id' | 'od
     }
   }
 
-  return barcos.sort(porAntiguedad)
+  const etiquetas = etiquetasDeBarcos(barcos.map((barco) => ({ odooId: barco.barcoOdooId, nombre: barco.barcoNombre })))
+  const conEtiqueta: BarcoParaEntregar[] = barcos.map((barco, posicion) => ({ ...barco, barcoEtiqueta: etiquetas[posicion] }))
+  return conEtiqueta.sort(porAntiguedad)
 }
 
 /** The `data:image/png;base64,` that a canvas puts in front of the image: Odoo's `signature` wants what comes after it. */

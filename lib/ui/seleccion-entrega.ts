@@ -102,14 +102,15 @@ function paraComparar(texto: string): string {
 }
 
 /**
- * The barcos whose name contains what is in the field of the list, from the first letter (the list is short: it is the
- * barcos with something to deliver, and filtering it asks nothing of the server). The blanks at the ends of what was
- * typed are not part of it. The order is the one of the list.
+ * The barcos whose label contains what is in the field of the list, from the first letter (the list is short: it is the
+ * barcos with something to deliver, and filtering it asks nothing of the server). The label is what the list shows
+ * of each barco: its name, and its Odoo id when another barco has the same name, so that the id finds it too. The
+ * blanks at the ends of what was typed are not part of it. The order is the one of the list.
  */
-export function filtrarBarcos<T extends { barcoNombre: string }>(barcos: T[], escrito: string): T[] {
+export function filtrarBarcos<T extends { barcoEtiqueta: string }>(barcos: T[], escrito: string): T[] {
   const buscado = paraComparar(escrito.trim())
   if (buscado === '') return barcos
-  return barcos.filter((barco) => paraComparar(barco.barcoNombre).includes(buscado))
+  return barcos.filter((barco) => paraComparar(barco.barcoEtiqueta).includes(buscado))
 }
 
 /** Whether the crew's confirmation can be sent: who receives, their signature, and something to deliver. */

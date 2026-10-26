@@ -8,7 +8,7 @@ import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
 import { filtrarBarcos, textoDeEspera, textoDeSinEnviar } from '@/lib/ui/seleccion-entrega'
 
 /**
- * A barco of the list: its name, since when it has packages waiting and how many, and a warning when some are received
+ * A barco of the list: its label (its name, with its Odoo id when another barco on the list is called the same), since when it has packages waiting and how many, and a warning when some are received
  * and not in Odoo yet. It opens the list of its packages. Opening a barco is a live reading of Odoo, so the link is not
  * prefetched: the app would read Odoo for every barco on the screen, one after the other, before anyone chose one.
  */
@@ -19,7 +19,7 @@ function FilaDeBarco({ barco, ahora }: { barco: BarcoParaEntregar; ahora: Date }
     <li>
       <Link href={`/entrega/${barco.barcoOdooId}`} prefetch={false} className="list-row">
         <span className="fila-texto">
-          <span className="fila-nombre">{barco.barcoNombre}</span>
+          <span className="fila-nombre">{barco.barcoEtiqueta}</span>
           <span className="fila-meta">{textoDeEspera(barco.desde, ahora)}</span>
           {sinEnviar ? <span className="banner banner-warn sin-enviar">{sinEnviar}</span> : null}
         </span>

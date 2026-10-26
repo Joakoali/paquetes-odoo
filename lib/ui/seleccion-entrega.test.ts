@@ -136,7 +136,7 @@ describe('textoDeEspera', () => {
 })
 
 describe('filtrarBarcos', () => {
-  const barcos = [{ barcoNombre: 'MAYANQUEEN' }, { barcoNombre: 'Arctic' }, { barcoNombre: 'Estrella del Mar' }, { barcoNombre: 'H3' }]
+  const barcos = [{ barcoEtiqueta: 'MAYANQUEEN' }, { barcoEtiqueta: 'Arctic' }, { barcoEtiqueta: 'Estrella del Mar' }, { barcoEtiqueta: 'H3' }]
 
   it('gives them all back for an empty field, or one with only blanks', () => {
     expect(filtrarBarcos(barcos, '')).toEqual(barcos)
@@ -144,26 +144,34 @@ describe('filtrarBarcos', () => {
   })
 
   it('keeps those whose name contains what was typed, whatever the case, from the first letter', () => {
-    expect(filtrarBarcos(barcos, 'a')).toEqual([{ barcoNombre: 'MAYANQUEEN' }, { barcoNombre: 'Arctic' }, { barcoNombre: 'Estrella del Mar' }])
-    expect(filtrarBarcos(barcos, 'queen')).toEqual([{ barcoNombre: 'MAYANQUEEN' }])
+    expect(filtrarBarcos(barcos, 'a')).toEqual([{ barcoEtiqueta: 'MAYANQUEEN' }, { barcoEtiqueta: 'Arctic' }, { barcoEtiqueta: 'Estrella del Mar' }])
+    expect(filtrarBarcos(barcos, 'queen')).toEqual([{ barcoEtiqueta: 'MAYANQUEEN' }])
   })
 
   it('does not mind accents, nor the blanks around the text', () => {
-    expect(filtrarBarcos([{ barcoNombre: 'Águila' }], '  aguila ')).toEqual([{ barcoNombre: 'Águila' }])
-    expect(filtrarBarcos([{ barcoNombre: 'Aguila' }], 'ÁGU')).toEqual([{ barcoNombre: 'Aguila' }])
+    expect(filtrarBarcos([{ barcoEtiqueta: 'Águila' }], '  aguila ')).toEqual([{ barcoEtiqueta: 'Águila' }])
+    expect(filtrarBarcos([{ barcoEtiqueta: 'Aguila' }], 'ÁGU')).toEqual([{ barcoEtiqueta: 'Aguila' }])
   })
 
   it('keeps the blanks inside: a name can have them', () => {
-    expect(filtrarBarcos(barcos, 'del mar')).toEqual([{ barcoNombre: 'Estrella del Mar' }])
+    expect(filtrarBarcos(barcos, 'del mar')).toEqual([{ barcoEtiqueta: 'Estrella del Mar' }])
   })
 
   it('takes what is typed as text and not as a pattern', () => {
     expect(filtrarBarcos(barcos, '.*')).toEqual([])
   })
 
+  it('goes by what the list shows of each barco, so that two with the same name can be told apart by their id', () => {
+    const gemelos = [{ barcoEtiqueta: 'H3 · #1234' }, { barcoEtiqueta: 'MAYANQUEEN' }, { barcoEtiqueta: 'H3 · #1301' }]
+
+    expect(filtrarBarcos(gemelos, 'h3')).toEqual([{ barcoEtiqueta: 'H3 · #1234' }, { barcoEtiqueta: 'H3 · #1301' }])
+    expect(filtrarBarcos(gemelos, '#1301')).toEqual([{ barcoEtiqueta: 'H3 · #1301' }])
+    expect(filtrarBarcos(gemelos, 'h3 · #1234')).toEqual([{ barcoEtiqueta: 'H3 · #1234' }])
+  })
+
   it('is empty when no name matches, and it keeps the order of the list', () => {
     expect(filtrarBarcos(barcos, 'zzz')).toEqual([])
-    expect(filtrarBarcos(barcos, 'r').map((barco) => barco.barcoNombre)).toEqual(['Arctic', 'Estrella del Mar'])
+    expect(filtrarBarcos(barcos, 'r').map((barco) => barco.barcoEtiqueta)).toEqual(['Arctic', 'Estrella del Mar'])
   })
 })
 

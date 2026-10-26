@@ -28,8 +28,8 @@ const operario = { id: 'operario-1', nombre: 'Veronika', rol: 'operario' } as Op
 const almacen = { id: 4, prefijo: 'MB92', odooOutTypeId: 2 } as Almacen
 
 const barcos: BarcoParaEntregar[] = [
-  { barcoOdooId: 7, barcoNombre: 'MAYANQUEEN', paquetes: 12, desde: new Date('2026-10-14T09:00:00Z'), sinEnviar: 0 },
-  { barcoOdooId: 8, barcoNombre: 'GAJA', paquetes: 1, desde: new Date('2026-10-21T09:00:00Z'), sinEnviar: 3 },
+  { barcoOdooId: 7, barcoNombre: 'MAYANQUEEN', barcoEtiqueta: 'MAYANQUEEN', paquetes: 12, desde: new Date('2026-10-14T09:00:00Z'), sinEnviar: 0 },
+  { barcoOdooId: 8, barcoNombre: 'GAJA', barcoEtiqueta: 'GAJA', paquetes: 1, desde: new Date('2026-10-21T09:00:00Z'), sinEnviar: 3 },
 ]
 const entregadas: EntregaDeHoy[] = [
   { id: 'e1', barcoNombre: 'H3', paquetes: 4, receptorNombre: 'Tom Baker', estado: 'ok' },
