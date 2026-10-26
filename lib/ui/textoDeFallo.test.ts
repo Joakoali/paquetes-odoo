@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResultadoAccion } from '@/lib/acciones'
-import { SIN_RESPUESTA, textoDeFallo } from './textoDeFallo'
+import { llamarAccion, SIN_RESPUESTA, textoDeFallo } from './textoDeFallo'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -66,6 +66,41 @@ describe('textoDeFallo', () => {
 
     await textoDeFallo(queResponde({ ok: false, error: 'Algo falló. Probá de nuevo.' }), 'sesion-1')
     await textoDeFallo(queResponde({ ok: true, valor: undefined }), 'sesion-1')
+
+    expect(consola).not.toHaveBeenCalled()
+  })
+})
+
+describe('llamarAccion', () => {
+  it('gives back what the action answered, a value included, as it is', async () => {
+    const llamada = vi.fn().mockResolvedValue({ ok: true, valor: 'enviada' })
+
+    expect(await llamarAccion(llamada)).toEqual({ ok: true, valor: 'enviada' })
+    expect(llamada).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives back the text of a failure the action expected, as it is', async () => {
+    const resultado = await llamarAccion(async () => ({ ok: false as const, error: 'Esta recepción ya se envió a Odoo.' }))
+
+    expect(resultado).toEqual({ ok: false, error: 'Esta recepción ya se envió a Odoo.' })
+  })
+
+  it('turns a call that fails into the "no hubo respuesta" failure instead of throwing, and logs it', async () => {
+    const consola = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const resultado = await llamarAccion(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+
+    expect(resultado).toEqual({ ok: false, error: SIN_RESPUESTA })
+    expect(consola).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not log anything when the action answers', async () => {
+    const consola = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await llamarAccion(async () => ({ ok: false as const, error: 'Algo falló. Probá de nuevo.' }))
+    await llamarAccion(async () => ({ ok: true as const, valor: 1 }))
 
     expect(consola).not.toHaveBeenCalled()
   })

@@ -2,7 +2,7 @@
 
 import { useState, useTransition, type ReactNode } from 'react'
 import type { ResultadoAccion } from '@/lib/acciones'
-import { textoDeFallo } from './textoDeFallo'
+import { textoDeFallo } from '@/lib/ui/textoDeFallo'
 
 /**
  * A button of a problem in Pendientes ("Reintentar", "Marcar como revisado"). It runs a server action on the

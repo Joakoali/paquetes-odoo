@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { elegirAlmacenAction } from '@/app/(app)/almacen-actions'
 // Types only: lib/almacen-activo.ts and db/ pull in the database, which must not get into the client.
 import type { Almacen } from '@/db/schema'
+import { ignorarTeclas } from '@/lib/ui/foco'
 
 export type AlmacenOpcion = Pick<Almacen, 'id' | 'prefijo' | 'nombre'>
 
@@ -21,6 +22,10 @@ const SEGUNDOS_DEL_AVISO = 8
  * server may not do what was asked (the almacén went inactive meanwhile, the session expired), and then the pill
  * must keep telling the almacén that is really in use. After the action it asks for the page again, and the new
  * `activoId` arrives with it.
+ *
+ * It is for touch only. The barcode gun types like a keyboard, and a code that is scanned while this select has the
+ * focus would choose an almacén by type-ahead, with nobody having touched it. So the select ignores the keyboard
+ * (except Tab) and does not keep the focus once it has chosen: the screens with a scan field take it back.
  */
 export function AlmacenSwitcher({ activoId, disponibles }: { activoId: number; disponibles: AlmacenOpcion[] }) {
   const router = useRouter()
@@ -58,7 +63,12 @@ export function AlmacenSwitcher({ activoId, disponibles }: { activoId: number; d
         aria-label="Almacén"
         value={activoId}
         disabled={cambiando}
-        onChange={(evento) => elegir(Number(evento.target.value))}
+        onKeyDown={ignorarTeclas}
+        onChange={(evento) => {
+          const almacenId = Number(evento.target.value)
+          evento.target.blur()
+          elegir(almacenId)
+        }}
       >
         {disponibles.map((almacen) => (
           <option key={almacen.id} value={almacen.id}>

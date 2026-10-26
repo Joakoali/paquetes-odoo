@@ -3,7 +3,8 @@
  * contrast, buttons and rows big enough for a finger, green for the main action and for what went well, red for
  * errors and duplicates, amber for what is in progress. Light theme only.
  *
- * Order: tokens, base, shared classes, the shell of the app (components/app-shell.tsx and the ones it uses), login.
+ * Order: tokens, base, shared classes, the shell of the app (components/app-shell.tsx and the ones it uses), login,
+ * the reception screen of a barco (app/(app)/recepcion/[sesionId], components/scan-input.tsx and courier-picker.tsx).
  */
 
 /* ------------------------------------------------------------------ Tokens */
@@ -731,4 +732,193 @@ details[open] > summary::before {
 
 .login-field .label + .input {
   margin-top: 0;
+}
+
+/* ------------------------------------------------------ Recepción de un barco */
+
+/* "‹ Recepciones" and the name of the barco, which is what the operario checks first. */
+.barco-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+
+.barco-cabecera > .btn-link {
+  padding-left: 0;
+}
+
+.barco-nombre {
+  min-width: 0;
+  font-size: 1.75rem;
+  letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+
+/* The couriers. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip-otro {
+  border-style: dashed;
+}
+
+.couriers-otros {
+  margin-top: 0.75rem;
+}
+
+.couriers-lista {
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.couriers-lista .list-row[aria-pressed="true"] {
+  background: var(--surface-2);
+  font-weight: 700;
+}
+
+.couriers-vacio {
+  color: var(--text-2);
+}
+
+/*
+ * The scan field. The blue border is how the operario sees that the gun is heard: it is the border of the focus, so
+ * a field that lost the focus looks different (grey) and says so before a code is lost.
+ */
+.scan {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.scan-campo {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0 0.875rem;
+  border: 2.5px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.scan-campo:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 4px var(--focus-ring);
+}
+
+.scan-barras {
+  flex: none;
+  width: 26px;
+  height: 18px;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--text) 0 2px,
+    transparent 2px 4px,
+    var(--text) 4px 5px,
+    transparent 5px 8px
+  );
+}
+
+/* 16px or more: below that, iOS zooms into the field. The ring is the one of .scan-campo above. */
+.scan-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 3.5rem;
+  border: 0;
+  background: transparent;
+  font-size: 1.125rem;
+}
+
+.scan-input:focus-visible {
+  outline: none;
+}
+
+.scan-input::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+.scan .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* What happened to the last scan. The place is always there: what is below must not jump at every code. */
+.respuesta-lugar {
+  min-height: 3.5rem;
+}
+
+.respuesta {
+  padding: 0.75rem 1rem;
+  font-size: 1.125rem;
+  overflow-wrap: anywhere;
+}
+
+/* The packages. The list has its own scroll, so that the buttons below it are never far away. */
+.paquetes-lista {
+  max-height: 50vh;
+  max-height: 50dvh;
+  overflow-y: auto;
+}
+
+.lista-vacia {
+  color: var(--text-2);
+}
+
+.paquete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.125rem 0.75rem;
+  min-height: var(--tap);
+  padding: 0.25rem 0.875rem;
+}
+
+.paquete-codigo {
+  font-size: 1rem;
+}
+
+.paquete-estado {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.paquete-verificando .paquete-estado {
+  color: var(--warn);
+}
+
+.paquete-duplicado,
+.paquete-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.paquete-duplicado .badge,
+.paquete-error .badge {
+  background: var(--surface);
+}
+
+.paquete-borrar {
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 1.25rem;
+}
+
+.paquete-duplicado .paquete-borrar,
+.paquete-error .paquete-borrar {
+  color: var(--danger);
+}
+
+/* "Dejar abierta" and "Enviar a Odoo": the main action takes what is left of the row. */
+.recepcion-acciones .btn-primary {
+  flex: 1 1 14rem;
+}
+
+.recepcion-descartar .btn-link {
+  color: var(--danger);
 }
