@@ -5,7 +5,8 @@
  *
  * Order: tokens, base, shared classes, the shell of the app (components/app-shell.tsx and the ones it uses), login,
  * the reception screen of a barco (app/(app)/recepcion/[sesionId], components/scan-input.tsx and courier-picker.tsx), the
- * home of Recepción (app/(app)/recepcion/RecepcionHome.tsx and components/barco-search.tsx).
+ * home of Recepción (app/(app)/recepcion/RecepcionHome.tsx and components/barco-search.tsx), the delivery screens of the
+ * phone (app/(app)/entrega and components/signature-pad.tsx).
  */
 
 /* ------------------------------------------------------------------ Tokens */
@@ -997,12 +998,21 @@ details[open] > summary::before {
   line-height: 1;
 }
 
-/* The time of a recepción that has been open for more than a day: a .banner-warn small enough to sit in the line. */
-.abierta-vieja {
+/*
+ * The time of a recepción that has been open for more than a day, and the packages of a barco that are not in Odoo yet
+ * ("+3 sin enviar a Odoo", on the list of Entrega): a .banner-warn small enough to sit in the line.
+ */
+.abierta-vieja,
+.sin-enviar {
   display: inline-block;
   padding: 0 0.5rem;
   font-size: 0.8125rem;
   line-height: 1.5;
+}
+
+/* In a column of text, not as wide as it. */
+.sin-enviar {
+  align-self: flex-start;
 }
 
 .inicio-enviar {
@@ -1111,4 +1121,166 @@ details[open] > summary::before {
 .dialogo-codigo {
   font-size: 1.125rem;
   font-weight: 700;
+}
+
+/* ------------------------------------------------------------------ Entrega */
+
+/*
+ * The list of packages of a barco: one row per line, which is touched to take it out of the delivery. The box is green with
+ * a tick while the package is handed over, and empty (with "en depósito" in amber) while it stays.
+ */
+.linea {
+  gap: 0.75rem;
+}
+
+.linea-caja {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1.5px solid var(--primary);
+  border-radius: 6px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.linea-codigo {
+  flex: 1;
+  min-width: 0;
+  font-size: 1rem;
+}
+
+.linea-deposito {
+  flex: none;
+  color: var(--warn);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.linea-fuera {
+  color: var(--text-3);
+}
+
+.linea-fuera .linea-caja {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: transparent;
+}
+
+/* A message with a button next to it (the packages not sent yet, and what sending them answered). */
+.entrega-franja {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+}
+
+.entrega-franja > p {
+  flex: 1 1 14rem;
+}
+
+/*
+ * What goes next, which is always in reach: it stays at the bottom of the screen above the tab bar (on a phone; from 768px
+ * the tabs are up in the bar), over a long list. What it answers (an error) is on top of the button.
+ */
+.entrega-barra {
+  position: sticky;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  background: var(--bg);
+}
+
+.entrega-barra .btn {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .entrega-barra {
+    bottom: 0;
+  }
+}
+
+/* The barco and how many packages, over the name and the signature. */
+.entrega-resumen {
+  display: flex;
+  flex-direction: column;
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.entrega-resumen b {
+  font-size: 1.125rem;
+  overflow-wrap: anywhere;
+}
+
+.label + .firma {
+  margin-top: 0.375rem;
+}
+
+/*
+ * The box to sign in (components/signature-pad.tsx). The canvas is as big as the box, which takes the width of the screen:
+ * the pad measures it and draws at the density of the screen. `touch-action: none` is what lets a finger draw without the
+ * page scrolling under it.
+ */
+.firma {
+  position: relative;
+  height: 16rem;
+  overflow: hidden;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.firma[aria-disabled="true"] {
+  opacity: 0.6;
+}
+
+.firma-lienzo {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: var(--text);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* The line to sign over, and what to do. They are not touched: the finger goes through them to the canvas. */
+.firma-linea {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 1.75rem;
+  left: 0.75rem;
+  border-top: 1px solid var(--border-strong);
+  pointer-events: none;
+}
+
+.firma-pista {
+  position: absolute;
+  bottom: 0.5rem;
+  left: 0.75rem;
+  color: var(--text-3);
+  font-size: 0.75rem;
+  pointer-events: none;
+}
+
+.firma-borrar {
+  position: absolute;
+  top: 0;
+  right: 0;
 }
