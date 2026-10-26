@@ -44,14 +44,16 @@ function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
       ) : null}
 
       <div className="actions">
-        {tipo === 'duplicado' ? null : (
+        {/* A failed or a stuck send is solved by retrying it; only a duplicado is reviewed (spec 5.4). */}
+        {tipo === 'duplicado' ? (
+          <AccionProblema accion={marcarRevisadoAction} sesionId={sesionId} className="btn btn-secondary">
+            Marcar como revisado
+          </AccionProblema>
+        ) : (
           <AccionProblema accion={reintentarAction} sesionId={sesionId} className="btn btn-primary">
             Reintentar
           </AccionProblema>
         )}
-        <AccionProblema accion={marcarRevisadoAction} sesionId={sesionId} className="btn btn-secondary">
-          Marcar como revisado
-        </AccionProblema>
       </div>
 
       {problema.detalle ? (

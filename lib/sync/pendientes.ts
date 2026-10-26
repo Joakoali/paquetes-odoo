@@ -72,28 +72,40 @@ function tipoDeProblema(estado: SesionEscaneo['estado']): TipoProblema {
 }
 
 /**
- * What makes a sesión a problem, as the WHERE of a query, for the list and for the count at once so that the
- * two can never disagree. A sesión is one if it has not been reviewed, it is in the scope, and it is in `error`;
- * or waiting for its sync since before the stuck limit; or synced with a package that was left out when sent.
- * A duplicado found while scanning (`duplicadoAlEnviar` false) is not one: the operario saw it on the spot.
+ * A recepción that synced and left a package out because Odoo already had it when it was sent, and that nobody has
+ * reviewed. It is the only problem that can be reviewed: a failed or a stuck send is not in Odoo, and it leaves
+ * Pendientes when it is retried and synced, never by somebody saying they looked at it. A duplicado found while
+ * scanning (`duplicadoAlEnviar` false) is not one: the operario saw it on the spot.
+ *
+ * As a WHERE, for the list, the count and the review at once, so that what is listed and what can be reviewed
+ * are the same thing and can never disagree: a review can only be set on a sesión that is a duplicado now.
  */
-function esProblema(alcance: Alcance, ahora: Date) {
-  const limiteDeTrabado = new Date(ahora.getTime() - MINUTOS_TRABADO * 60_000)
+function esDuplicadoSinRevisar() {
   const conPaqueteDejadoAfuera = exists(
     db.select({ uno: sql`1` })
       .from(sesionCourierBatches)
       .innerJoin(sesionItems, eq(sesionItems.courierBatchId, sesionCourierBatches.id))
       .where(and(eq(sesionCourierBatches.sesionId, sesionesEscaneo.id), eq(sesionItems.duplicadoAlEnviar, true))),
   )
+  return and(eq(sesionesEscaneo.estado, 'sincronizada'), conPaqueteDejadoAfuera, isNull(sesionesEscaneo.revisadoAt))
+}
+
+/**
+ * What makes a sesión a problem, as the WHERE of a query, for the list and for the count at once so that the
+ * two can never disagree. A sesión is one if it is in the scope and it is in `error`; or waiting for its sync
+ * since before the stuck limit; or a duplicado nobody has reviewed. A review does not hide the other two, even
+ * if one is there: it is only for a duplicado.
+ */
+function esProblema(alcance: Alcance, ahora: Date) {
+  const limiteDeTrabado = new Date(ahora.getTime() - MINUTOS_TRABADO * 60_000)
 
   return and(
-    isNull(sesionesEscaneo.revisadoAt),
     // An empty list of almacenes matches nothing.
     alcance === 'todos' ? undefined : inArray(sesionesEscaneo.almacenId, alcance.almacenIds),
     or(
       eq(sesionesEscaneo.estado, 'error'),
       and(eq(sesionesEscaneo.estado, 'confirmada_pendiente_sync'), lt(sesionesEscaneo.confirmedAt, limiteDeTrabado)),
-      and(eq(sesionesEscaneo.estado, 'sincronizada'), conPaqueteDejadoAfuera),
+      esDuplicadoSinRevisar(),
     ),
   )
 }
@@ -233,16 +245,21 @@ export async function reintentar(entrada: { sesionId: string; operarioId: string
 }
 
 /**
- * Notes that somebody looked at the problem, so that it stops being listed. It changes nothing else: a sesión
- * in `error` stays in `error`. The first review is the one that stays (who and when), so an old screen that
- * reviews it a second time changes and audits nothing. A retry clears it, since what fails next is a new problem.
+ * Notes that somebody looked at a duplicado, so that it stops being listed. Only a duplicado can be reviewed:
+ * for a failed or a stuck send, an open recepción, an entrega or anything that is not synced with a package left
+ * out, it does nothing at all (no change, no audit). That is checked by the update itself, with the condition
+ * the list uses for a duplicado, so a screen that is out of date (showing as a problem a send somebody has
+ * retried since) cannot stamp a send that is still on its way, nor hide a failure from everybody.
+ *
+ * It changes nothing else. The first review is the one that stays (who and when), so an old screen that reviews
+ * it a second time changes and audits nothing.
  */
 export async function marcarRevisado(entrada: { sesionId: string; operarioId: string }): Promise<void> {
   const { sesionId, operarioId } = entrada
 
   const [sesion] = await db.update(sesionesEscaneo)
     .set({ revisadoAt: new Date(), revisadoPor: operarioId })
-    .where(and(eq(sesionesEscaneo.id, sesionId), isNull(sesionesEscaneo.revisadoAt)))
+    .where(and(eq(sesionesEscaneo.id, sesionId), esDuplicadoSinRevisar()))
     .returning({ almacenId: sesionesEscaneo.almacenId, barcoOdooId: sesionesEscaneo.barcoOdooId })
   if (!sesion) return
 

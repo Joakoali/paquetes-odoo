@@ -129,13 +129,15 @@ export async function syncEntregaSession(sesionId: string): Promise<void> {
     }
   }
 
-  // A failure that an earlier attempt left behind (one QStash then retried) is over.
+  // A failure that an earlier attempt left behind (one QStash then retried) is over, and so is a review set for it.
   await db.update(sesionesEscaneo)
     .set({
       estado: 'sincronizada',
       syncedAt: new Date(),
       ultimoError: null,
       ultimoErrorTipo: null,
+      revisadoAt: null,
+      revisadoPor: null,
     })
     .where(eq(sesionesEscaneo.id, sesionId))
 

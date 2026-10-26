@@ -55,7 +55,7 @@ export async function reintentarAction(sesionId: string): Promise<ResultadoAccio
   return sobreLaSesion(sesionId, reintentar)
 }
 
-/** Marks a problem as looked at, so it stops being listed. */
+/** Marks a duplicado as looked at, so it stops being listed. Anything else is left as it is: see `marcarRevisado`. */
 export async function marcarRevisadoAction(sesionId: string): Promise<ResultadoAccion> {
   return sobreLaSesion(sesionId, marcarRevisado)
 }

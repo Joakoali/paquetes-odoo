@@ -136,13 +136,21 @@ describe('listarProblemas', () => {
     expect(await idsDe('todos')).toEqual([])
   })
 
-  it('a reviewed session disappears', async () => {
-    await enError({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
-    await trabada({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
+  it('a reviewed duplicado disappears', async () => {
     await conDuplicado({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
-    const sinRevisar = await enError()
+    const sinRevisar = await conDuplicado({ barcoOdooId: 674 })
 
     expect(await idsDe('todos')).toEqual([sinRevisar.id])
+  })
+
+  it('a failed or stuck send is listed whatever its review says: only a duplicado can be reviewed', async () => {
+    // A review on a send that is not a duplicado never gets in through marcarRevisado; if one is there anyway it
+    // does not hide the failure from everybody.
+    const error = await enError({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
+    const envioTrabado = await trabada({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
+
+    expect(await idsDe('todos')).toEqual([error.id, envioTrabado.id])
+    expect(await contarProblemas('todos', AHORA)).toBe(2)
   })
 
   it('flags configuration errors for the admin', async () => {
@@ -430,7 +438,7 @@ describe('contarProblemas', () => {
     await trabada({ confirmedAt: haceMinutos(5), barcoOdooId: 674 }) // not stuck yet
     await conDuplicado()
     await conDuplicado({ almacenId: mad1.id })
-    await enError({ revisadoAt: haceMinutos(1), revisadoPor: veronika.id, barcoOdooId: 675 }) // reviewed
+    await conDuplicado({ revisadoAt: haceMinutos(1), revisadoPor: veronika.id, barcoOdooId: 675 }) // reviewed
     await crearSesion({ estado: 'en_curso', barcoOdooId: 676 })
 
     const alcances: Alcance[] = [
@@ -656,12 +664,8 @@ describe('marcarRevisado', () => {
     })
   })
 
-  it.each([
-    ['an error', () => enError()],
-    ['a stuck send', () => trabada()],
-    ['a duplicado', () => conDuplicado()],
-  ])('makes %s disappear from the list and from the count', async (_tipo, crear) => {
-    const sesion = await crear()
+  it('makes a duplicado disappear from the list and from the count', async () => {
+    const sesion = await conDuplicado()
     const otra = await enError({ barcoOdooId: 674 })
     expect(await contarProblemas('todos', AHORA)).toBe(2)
 
@@ -671,17 +675,71 @@ describe('marcarRevisado', () => {
     expect(await contarProblemas('todos', AHORA)).toBe(1)
   })
 
+  describe('what is not a duplicado problem cannot be reviewed: a failed send leaves the list when it is synced', () => {
+    it.each([
+      ['a failed send', () => enError()],
+      ['a stuck send', () => trabada()],
+      // A send on its way, however it got there: a screen that is out of date may still show it as a problem.
+      ['a send that was retried and is waiting for its sync', () => crearSesion({ estado: 'confirmada_pendiente_sync', confirmedAt: haceMinutosReales(1) })],
+      ['an open recepción', () => crearSesion({ estado: 'en_curso', confirmedAt: null })],
+      ['a synced recepción with nothing left out when it was sent', () => crearSesion({ estado: 'sincronizada' })],
+    ])('does nothing for %s: no review, no audit, and it stays where it was', async (_tipo, crear) => {
+      const sesion = await crear()
+      const antes = await filaSesion(sesion.id)
+
+      await marcarRevisado({ sesionId: sesion.id, operarioId: veronika.id })
+
+      expect(await filaSesion(sesion.id)).toEqual(antes)
+      expect(registrarAuditoria).not.toHaveBeenCalled()
+    })
+
+    it('keeps a failed send in the list after somebody tried to review it', async () => {
+      const error = await enError()
+      const envioTrabado = await trabada()
+
+      await marcarRevisado({ sesionId: error.id, operarioId: veronika.id })
+      await marcarRevisado({ sesionId: envioTrabado.id, operarioId: veronika.id })
+
+      expect(await idsDe('todos')).toEqual([error.id, envioTrabado.id])
+      expect(await contarProblemas('todos', AHORA)).toBe(2)
+    })
+
+    it('does nothing for a send that is waiting for its sync with a package already flagged: it has not been sent yet', async () => {
+      // The worker flags what Odoo already has before it makes anything, so a run that fails afterwards leaves the
+      // flag behind on a send that is not synced. A stale screen must not stamp it.
+      const sesion = await crearSesion({ estado: 'confirmada_pendiente_sync', confirmedAt: haceMinutosReales(1) })
+      await agregarPaquete(sesion.id, 'JJD-DUP', { estado: 'duplicado', duplicadoAlEnviar: true, duplicadoRef: 'MB92/IN/00198' })
+
+      await marcarRevisado({ sesionId: sesion.id, operarioId: veronika.id })
+
+      expect(await filaSesion(sesion.id)).toMatchObject({ revisadoAt: null, revisadoPor: null })
+      expect(registrarAuditoria).not.toHaveBeenCalled()
+    })
+
+    it('does nothing for a stale screen that reviews a failed send after somebody retried it', async () => {
+      const sesion = await enError()
+      await agregarPaquete(sesion.id, 'JJD-DUP', { estado: 'duplicado', duplicadoAlEnviar: true, duplicadoRef: 'MB92/IN/00198' })
+      await reintentar({ sesionId: sesion.id, operarioId: eduardo.id })
+      vi.mocked(registrarAuditoria).mockClear()
+
+      await marcarRevisado({ sesionId: sesion.id, operarioId: veronika.id })
+
+      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', revisadoAt: null, revisadoPor: null })
+      expect(registrarAuditoria).not.toHaveBeenCalled()
+    })
+  })
+
   it('does not change the state of the sesión: it is a note, not a fix', async () => {
-    const sesion = await enError()
+    const sesion = await conDuplicado()
 
     await marcarRevisado({ sesionId: sesion.id, operarioId: veronika.id })
 
-    expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'error', ultimoError: 'Odoo HTTP 422: El lote ya existe' })
+    expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada' })
     expect(publishSync).not.toHaveBeenCalled()
   })
 
   it('keeps who reviewed it first when somebody else, with an old screen, does it again', async () => {
-    const sesion = await enError()
+    const sesion = await conDuplicado()
     await marcarRevisado({ sesionId: sesion.id, operarioId: veronika.id })
     const despuesDeLaPrimera = await filaSesion(sesion.id)
     vi.mocked(registrarAuditoria).mockClear()
@@ -699,26 +757,11 @@ describe('marcarRevisado', () => {
   })
 
   it('touches only the sesión it is asked for', async () => {
-    const revisada = await enError()
-    const otra = await enError({ barcoOdooId: 674 })
+    const revisada = await conDuplicado()
+    const otra = await conDuplicado({ barcoOdooId: 674 })
 
     await marcarRevisado({ sesionId: revisada.id, operarioId: veronika.id })
 
     expect(await filaSesion(otra.id)).toMatchObject({ revisadoAt: null, revisadoPor: null })
-  })
-
-  it('does not stop a retry that fails again from being a problem: retrying clears the review', async () => {
-    const sesion = await enError()
-    await marcarRevisado({ sesionId: sesion.id, operarioId: veronika.id })
-    expect(await idsDe('todos')).toEqual([])
-
-    await reintentar({ sesionId: sesion.id, operarioId: eduardo.id })
-    // The worker gives up on it again.
-    await db.update(sesionesEscaneo).set({ estado: 'error' }).where(eq(sesionesEscaneo.id, sesion.id))
-
-    expect(await idsDe('todos', new Date())).toEqual([sesion.id])
-    // ...and it can be reviewed again, by whoever looks at it now.
-    await marcarRevisado({ sesionId: sesion.id, operarioId: eduardo.id })
-    expect(await filaSesion(sesion.id)).toMatchObject({ revisadoPor: eduardo.id })
   })
 })

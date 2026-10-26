@@ -319,6 +319,16 @@ describe('syncEntregaSession', () => {
 
       expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', ultimoError: null, ultimoErrorTipo: null })
     })
+
+    it('clears a review that was set for an earlier problem: a review does not outlive it', async () => {
+      odooTiene(700)
+      const revisor = await seedOperario(db, { nombre: 'Eduardo' })
+      const sesion = await crearEntrega({ revisadoAt: new Date('2026-10-23T09:00:00Z'), revisadoPor: revisor.id })
+
+      await syncEntregaSession(sesion.id)
+
+      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', revisadoAt: null, revisadoPor: null })
+    })
   })
 
   describe('a chosen package that is no longer on the delivery in Odoo', () => {

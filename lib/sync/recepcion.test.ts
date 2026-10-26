@@ -707,6 +707,30 @@ describe('syncRecepcionSession', () => {
       expect(auditoria[0]).toMatchObject({ accion: 'sync_ok', operarioId: null })
       expect(auditoria[0].detalle).toEqual({ sesionId: sesion.id, odooPickingRef: PICKING_REF })
     })
+
+    it('clears a review that was set for an earlier problem, so that the duplicados it finds now are seen', async () => {
+      const sesion = await crearRecepcion(
+        [{ courier: dhl, paquetes: [{ tracking: 'T1' }, { tracking: 'T2' }] }],
+        { revisadoAt: new Date('2026-10-23T09:00:00Z'), revisadoPor: eduardo.id },
+      )
+      vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue(new Map([['T2', 'MB92/IN/00010']]))
+
+      await syncRecepcionSession(sesion.id)
+
+      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', revisadoAt: null, revisadoPor: null })
+    })
+
+    it('clears it too when every package turns out to be a duplicado and no picking is made', async () => {
+      const sesion = await crearRecepcion(
+        [{ courier: dhl, paquetes: [{ tracking: 'T1' }] }],
+        { revisadoAt: new Date('2026-10-23T09:00:00Z'), revisadoPor: eduardo.id },
+      )
+      vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue(new Map([['T1', 'MB92/IN/00010']]))
+
+      await syncRecepcionSession(sesion.id)
+
+      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', revisadoAt: null, revisadoPor: null })
+    })
   })
 
   describe('what an admin has to fix', () => {

@@ -238,9 +238,11 @@ describe('PendientesPage', () => {
   })
 
   describe('the buttons', () => {
+    // Spec 5.4: a failed or stuck send is solved by retrying it, and only a duplicado is "revisado". Letting an
+    // operario mark a failed send as reviewed would hide it from everybody while it is still not in Odoo.
     it.each([
-      ['error', ['Reintentar', 'Marcar como revisado']],
-      ['trabado', ['Reintentar', 'Marcar como revisado']],
+      ['error', ['Reintentar']],
+      ['trabado', ['Reintentar']],
       ['duplicado', ['Marcar como revisado']],
     ] as const)('on a %s problem are %j', async (tipo, esperados) => {
       expect((await botones(problema({ tipo }))).map((boton) => boton.texto)).toEqual(esperados)
@@ -255,9 +257,7 @@ describe('PendientesPage', () => {
 
       expect(todos.map((boton) => [boton.texto, nombreDe(boton.accion), boton.sesionId])).toEqual([
         ['Reintentar', 'reintentarAction', 'sesion-a'],
-        ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-a'],
         ['Reintentar', 'reintentarAction', 'sesion-b'],
-        ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-b'],
         ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-c'],
       ])
     })
@@ -270,14 +270,25 @@ describe('PendientesPage', () => {
     })
 
     it('are the main button for Reintentar and the secondary one for Marcar como revisado', async () => {
-      const [reintentar, revisar] = await botones(problema({ tipo: 'error' }))
+      const [reintentar, revisar] = await botones(problema({ sesionId: 'a', tipo: 'error' }), problema({ sesionId: 'b', tipo: 'duplicado' }))
 
       expect([reintentar.texto, reintentar.className]).toEqual(['Reintentar', 'btn btn-primary'])
       expect([revisar.texto, revisar.className]).toEqual(['Marcar como revisado', 'btn btn-secondary'])
     })
 
+    it('never offer Marcar como revisado on a failed or a stuck send, wherever the problem comes from', async () => {
+      const pagina = await html(
+        problema({ sesionId: 'a', tipo: 'error', sesionTipo: 'recepcion' }),
+        problema({ sesionId: 'b', tipo: 'error', sesionTipo: 'entrega', loArreglaElAdmin: true }),
+        problema({ sesionId: 'c', tipo: 'trabado' }),
+      )
+
+      expect(pagina).not.toContain('Marcar como revisado')
+      expect(pagina.match(/>Reintentar</g)).toHaveLength(3)
+    })
+
     it('are drawn as plain buttons, enabled and with no message, until one is pressed', async () => {
-      const pagina = await html(problema({ tipo: 'error' }))
+      const pagina = await html(problema({ sesionId: 'a', tipo: 'error' }), problema({ sesionId: 'b', tipo: 'duplicado' }))
 
       expect(pagina).toMatch(/<button[^>]*type="button"[^>]*>Reintentar<\/button>/)
       expect(pagina).toMatch(/<button[^>]*class="btn btn-primary"[^>]*>Reintentar<\/button>/)

@@ -45,7 +45,8 @@ async function scannerNames(sesion: SesionEscaneo): Promise<string> {
 /**
  * Closes the recepción as synced and audits it. `note` is what Pendientes shows when every package turned
  * out to be a duplicate; `pickingRef` is null when no picking was made. A failure that an earlier attempt
- * left behind (one QStash then retried) is over.
+ * left behind (one QStash then retried) is over, and so is a review set for it: the duplicados this sync
+ * leaves out are a new problem that nobody has seen.
  */
 async function finishSync(
   sesionId: string,
@@ -57,6 +58,8 @@ async function finishSync(
       syncedAt: new Date(),
       ultimoError: result.note,
       ultimoErrorTipo: null,
+      revisadoAt: null,
+      revisadoPor: null,
     })
     .where(eq(sesionesEscaneo.id, sesionId))
 
