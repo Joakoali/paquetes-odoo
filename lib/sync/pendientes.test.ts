@@ -326,6 +326,7 @@ describe('listarProblemas', () => {
           { trackingNumber: 'JJD-1', ref: null },
           { trackingNumber: 'JJD-2', ref: 'MB92/IN/00198' },
         ],
+        entrega: null,
         mensaje: mensajeProblema('odoo'),
         detalle: 'Odoo HTTP 422: El lote ya existe',
         loArreglaElAdmin: false,
@@ -359,14 +360,44 @@ describe('listarProblemas', () => {
       expect(problema.fecha).toEqual(haceMinutos(300))
     })
 
-    it('describes an entrega, which has no packages of its own to list', async () => {
-      const entrega = await enError({ tipo: 'entrega', operarioId: eduardo.id, ultimoErrorTipo: 'configuracion' })
+    it('describes an entrega, which has no tracking numbers of its own to list, by how many packages it covers and who received them', async () => {
+      const entrega = await enError({
+        tipo: 'entrega', operarioId: eduardo.id, ultimoErrorTipo: 'configuracion',
+        odooMoveLineIds: [11, 12, 13], receptorNombre: 'Capitán Pérez',
+      })
 
       const [problema] = await listarProblemas('todos', AHORA)
 
       expect(problema).toMatchObject({
         sesionId: entrega.id, tipo: 'error', sesionTipo: 'entrega', operarioNombre: 'Eduardo', paquetes: [], loArreglaElAdmin: true,
+        entrega: { paquetes: 3, receptorNombre: 'Capitán Pérez' },
       })
+    })
+
+    it('says the same of a stuck entrega', async () => {
+      await trabada({ tipo: 'entrega', odooMoveLineIds: [5], receptorNombre: 'Ana', operarioId: eduardo.id })
+
+      const [problema] = await listarProblemas('todos', AHORA)
+
+      expect(problema).toMatchObject({ tipo: 'trabado', sesionTipo: 'entrega', entrega: { paquetes: 1, receptorNombre: 'Ana' } })
+    })
+
+    it('does not make up what an entrega that was saved without them does not have', async () => {
+      await enError({ tipo: 'entrega', odooMoveLineIds: null, receptorNombre: null })
+
+      const [problema] = await listarProblemas('todos', AHORA)
+
+      expect(problema.entrega).toEqual({ paquetes: 0, receptorNombre: null })
+    })
+
+    it('has no entrega part on a recepción, which lists its own packages', async () => {
+      const sesion = await enError({ odooMoveLineIds: [1, 2], receptorNombre: 'Nadie' }) // what a recepción never has
+      await agregarPaquete(sesion.id, 'JJD-1')
+
+      const [problema] = await listarProblemas('todos', AHORA)
+
+      expect(problema.entrega).toBeNull()
+      expect(problema.paquetes).toEqual([{ trackingNumber: 'JJD-1', ref: null }])
     })
 
     it('calls a barco the cache does not know by its Odoo id', async () => {

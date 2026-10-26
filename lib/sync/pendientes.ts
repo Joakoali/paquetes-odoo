@@ -41,9 +41,15 @@ export interface Problema {
   /**
    * The packages the problem is about, in the order they were scanned, each with the picking where Odoo already
    * had it (`ref`) when it did. For an `error` or a `trabado` they are all the recepción's, since the whole
-   * recepción is what failed; for a `duplicado`, only those left out. An entrega has no packages of its own.
+   * recepción is what failed; for a `duplicado`, only those left out. An entrega has none of its own: it is
+   * described by `entrega`.
    */
   paquetes: Array<{ trackingNumber: string; ref: string | null }>
+  /**
+   * What an entrega says of the packages it covers, since it has no tracking numbers to list: how many the crew
+   * was given and the name of who received them. Null for a recepción.
+   */
+  entrega: { paquetes: number; receptorNombre: string | null } | null
   /** What happened and what to do, in words for the operator. */
   mensaje: string
   /** The technical error, for "Ver detalle". */
@@ -158,6 +164,8 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
     ultimoErrorTipo: sesionesEscaneo.ultimoErrorTipo,
     confirmedAt: sesionesEscaneo.confirmedAt,
     createdAt: sesionesEscaneo.createdAt,
+    odooMoveLineIds: sesionesEscaneo.odooMoveLineIds,
+    receptorNombre: sesionesEscaneo.receptorNombre,
     barcoOdooId: sesionesEscaneo.barcoOdooId,
     barcoNombre: barcosCache.nombre,
     almacenPrefijo: almacenes.prefijo,
@@ -186,6 +194,9 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
       fecha: sesion.confirmedAt ?? sesion.createdAt,
       paquetes: (tipo === 'duplicado' ? suyos.filter((paquete) => paquete.dejadoAfueraAlEnviar) : suyos)
         .map(({ trackingNumber, ref }) => ({ trackingNumber, ref })),
+      entrega: sesion.tipo === 'entrega'
+        ? { paquetes: sesion.odooMoveLineIds?.length ?? 0, receptorNombre: sesion.receptorNombre }
+        : null,
       mensaje: mensajeDe(tipo, sesion.ultimoErrorTipo),
       detalle: sesion.ultimoError,
       loArreglaElAdmin: sesion.ultimoErrorTipo === 'configuracion',

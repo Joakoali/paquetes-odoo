@@ -47,6 +47,7 @@ function problema(datos: Partial<Problema> = {}): Problema {
     operarioNombre: 'Veronika',
     fecha: new Date('2026-10-23T09:00:00.000Z'),
     paquetes: [],
+    entrega: null,
     mensaje: 'Odoo rechazó el envío. Mirá el detalle o avisá al admin.',
     detalle: null,
     loArreglaElAdmin: false,
@@ -201,6 +202,32 @@ describe('PendientesPage', () => {
       }))
 
       expect(pagina.match(/JJD-\d/g)).toEqual(['JJD-9', 'JJD-1', 'JJD-5'])
+    })
+
+    it('says how many packages an entrega covers and who received them, in the plain words of the entregas of today', async () => {
+      const pagina = await html(problema({ sesionTipo: 'entrega', entrega: { paquetes: 3, receptorNombre: 'Capitán Pérez' } }))
+
+      expect(pagina).toContain('3 paquetes · recibió Capitán Pérez')
+    })
+
+    it('says "1 paquete" for one, and leaves out the receiver when the entrega has none', async () => {
+      const uno = await html(problema({ sesionTipo: 'entrega', entrega: { paquetes: 1, receptorNombre: null } }))
+
+      expect(uno).toContain('1 paquete<')
+      expect(uno).not.toContain('recibió')
+    })
+
+    it('says nothing of packages received for a recepción', async () => {
+      const pagina = await html(problema({ sesionTipo: 'recepcion', paquetes: [{ trackingNumber: 'JJD-1', ref: null }] }))
+
+      expect(pagina).not.toContain('recibió')
+    })
+
+    it('does not let the name of who received act as HTML', async () => {
+      const pagina = await html(problema({ sesionTipo: 'entrega', entrega: { paquetes: 2, receptorNombre: '<b>Tom</b>' } }))
+
+      expect(pagina).not.toContain('<b>Tom</b>')
+      expect(pagina).toContain('&lt;b&gt;Tom&lt;/b&gt;')
     })
 
     it('lists no packages for an entrega, which has none, and so does not draw an empty list', async () => {

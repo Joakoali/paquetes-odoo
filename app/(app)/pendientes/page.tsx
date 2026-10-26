@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { haceCuanto } from '@/lib/fechas'
+import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
 import { alcanceDelOperario, listarProblemas, type Problema, type TipoProblema } from '@/lib/sync/pendientes'
 import { marcarRevisadoAction, reintentarAction } from './actions'
 import { AccionProblema } from './AccionProblema'
@@ -30,6 +31,14 @@ function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
       </p>
       <h2>{problema.barcoNombre}</h2>
       <p>{quienYCuando}</p>
+      {problema.entrega ? (
+        // An entrega has no tracking numbers to list: it says how many packages it covers and who received them.
+        <p>
+          {[textoDePaquetes(problema.entrega.paquetes), problema.entrega.receptorNombre ? `recibió ${problema.entrega.receptorNombre}` : null]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      ) : null}
 
       <p>{problema.mensaje}</p>
       {problema.paquetes.length > 0 ? (
