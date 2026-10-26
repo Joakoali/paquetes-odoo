@@ -98,7 +98,8 @@ export default async function EntregaBarcoPage({ params }: { params: Promise<{ b
   // The key is the lines it was given: if they change (the packages that were sent come in a minute later), the choice
   // starts again from "all of them", and a line that is new is not left out of it without anybody having said so.
   return (
-    <main className="page">
+    // As tall as the screen: the box to sign in takes what is left (see `.entrega-pagina`).
+    <main className="page entrega-pagina">
       <EntregaFlow
         key={lectura.lineas.map((linea) => linea.moveLineId).join(',')}
         barcoOdooId={barcoOdooId}

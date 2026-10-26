@@ -129,6 +129,13 @@ describe('EntregaBarcoPage', () => {
     })
   })
 
+  it('draws it in a screen that is as tall as the viewport, so that the box to sign in takes the height that is left', async () => {
+    const resultado = (await pagina()) as ReactElement<{ className: string }>
+
+    expect(resultado.type).toBe('main')
+    expect(resultado.props.className).toBe('page entrega-pagina')
+  })
+
   it('says 0 packages unsent when this barco has none, whatever others have', async () => {
     vi.mocked(contarSinEnviarPorBarco).mockResolvedValue(new Map([[999, 8]]))
 

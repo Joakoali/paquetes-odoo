@@ -190,7 +190,8 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
           />
         </section>
 
-        <section>
+        {/* The one that grows: the box takes the height that is left on the screen. */}
+        <section className="entrega-firma">
           <p className="label">Firma</p>
           <SignaturePad onChange={setFirma} deshabilitado={bloqueado} />
         </section>

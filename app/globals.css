@@ -509,7 +509,13 @@ details[open] > summary::before {
   white-space: nowrap;
 }
 
+/*
+ * A column, so that a screen can take the height that is left (.entrega-pagina). A screen that does not ask for it is as
+ * tall as what is in it, as it is in a block: the <main> of every screen has its own width and centers itself.
+ */
 .shell-content {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
   /* What the fixed tab bar covers. */
@@ -1195,6 +1201,8 @@ details[open] > summary::before {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  /* At the bottom of the screen when there is little above it (the mockup), and where the list ends when there is a lot. */
+  margin-top: auto;
   padding: 0.5rem 0;
   background: var(--bg);
 }
@@ -1229,13 +1237,32 @@ details[open] > summary::before {
 }
 
 /*
- * The box to sign in (components/signature-pad.tsx). The canvas is as big as the box, which takes the width of the screen:
- * the pad measures it and draws at the density of the screen. `touch-action: none` is what lets a finger draw without the
- * page scrolling under it.
+ * The screens of a barco are as tall as the screen allows (the signature box is what takes what the rest leaves, as in the
+ * mockup: `.ph-sign { flex: 1 }`). A column that fills what is left of the shell, from under the bar to over the tab bar.
+ */
+.entrega-pagina {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+/* The label and the box to sign in, which is what grows. */
+.entrega-firma {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+/*
+ * The box to sign in (components/signature-pad.tsx). It takes the width of the screen and the height that is left (never
+ * less than 16rem, which is also its height when there is no column to grow in): the pad measures the box, whatever it
+ * does, and draws at the density of the screen. A pad that is given `alto` has that height and does not grow.
+ * `touch-action: none` is what lets a finger draw without the page scrolling under it.
  */
 .firma {
   position: relative;
-  height: 16rem;
+  flex: 1 1 auto;
+  min-height: 16rem;
   overflow: hidden;
   border: 2px dashed var(--border-strong);
   border-radius: var(--radius);
