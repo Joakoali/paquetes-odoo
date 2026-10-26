@@ -1,0 +1,1 @@
+CREATE INDEX "sesion_items_tracking_number_idx" ON "sesion_items" USING btree ("tracking_number");

@@ -15,6 +15,13 @@
       "when": 1792670263849,
       "tag": "0001_mejora_ui",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793019123458,
+      "tag": "0002_sesion_items_tracking_number_idx",
+      "breakpoints": true
     }
   ]
 }

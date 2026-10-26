@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import {
   pgTable, uuid, text, varchar, boolean, integer, timestamp,
-  pgEnum, jsonb, serial, primaryKey, unique, uniqueIndex,
+  pgEnum, jsonb, serial, primaryKey, unique, uniqueIndex, index,
 } from 'drizzle-orm/pg-core'
 
 export const rolEnum = pgEnum('rol', ['operario', 'admin'])
@@ -126,6 +126,9 @@ export const sesionItems = pgTable('sesion_items', {
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (t) => ({
   uniqTracking: unique().on(t.courierBatchId, t.trackingNumber),
+  // The check of whether a code is already in a recepción that is not in Odoo yet asks for the tracking number
+  // alone, once per scan: the unique index above starts with the courier batch and does not serve it.
+  trackingNumberIdx: index('sesion_items_tracking_number_idx').on(t.trackingNumber),
 }))
 
 export const trackingActivosCache = pgTable('tracking_activos_cache', {
