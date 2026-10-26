@@ -15,6 +15,9 @@ import { noRobarFoco } from '@/lib/ui/foco'
 import {
   respuestaDeEscaneo, respuestaDeFallo, SIN_COURIER, textoDeDuplicado, type Respuesta,
 } from '@/lib/ui/respuesta-escaneo'
+import {
+  agregarNoGuardados, decidirEscaneo, empezarASalir, RECEPCION_ABIERTA, terminarDeSalir, textoDeNoGuardados, textoDeRechazo,
+} from '@/lib/ui/salida-recepcion'
 import { prepararSonidos, sonarAviso, sonarOk } from '@/lib/ui/sonidos'
 import { llamarAccion, textoDeFallo } from '@/lib/ui/textoDeFallo'
 import {
@@ -70,6 +73,12 @@ function FilaDePaquete({ fila, ocupado, onBorrar }: {
  * The recepción is shared: it belongs to the almacén and the barco, and anybody who has the almacén may scan into it.
  * What is on the screen is what this tablet scanned and what was there when it opened; another tablet's scans show
  * up when the page is loaded again.
+ *
+ * Enviar, Descartar and "Dejar abierta" on an empty recepción close it, and the gun can fire while they run: a code
+ * sent then would queue behind the action, find the recepción closed, and be lost with the screen. From the tap, a code
+ * is not sent (`salida-recepcion`): it is refused with the warning sound and a strip that names it, and the screen
+ * does not go away while a refused code has not been seen: it says which were not saved and how to go back to scan
+ * them again.
  */
 export function RecepcionBarco({ recepcion, couriers }: {
   recepcion: RecepcionDetalle
@@ -86,8 +95,13 @@ export function RecepcionBarco({ recepcion, couriers }: {
   const [ejecutando, ejecutar] = useTransition()
   // Once the operario is on his way out, nothing more can be pressed.
   const [saliendo, setSaliendo] = useState(false)
+  // Where the screen is in leaving, kept in a ref because the gun can fire between one render and the next: the decision
+  // to refuse a code cannot wait for React.
+  const salida = useRef(RECEPCION_ABIERTA)
+  // The codes refused while the recepción closed, once it did: the screen is held with them in view until the operario goes.
+  const [sinGuardar, setSinGuardar] = useState<string[] | null>(null)
 
-  const ocupado = ejecutando || saliendo
+  const ocupado = ejecutando || saliendo || sinGuardar !== null
   const conteo = contarFilas(filas)
   const elegido = couriers.todos.find((courier) => courier.id === elegidoId) ?? null
 
@@ -113,6 +127,15 @@ export function RecepcionBarco({ recepcion, couriers }: {
 
   /** Not awaited by the field: the next code may arrive while this one is still being checked. */
   async function escanear(codigo: string) {
+    const decision = decidirEscaneo(salida.current, codigo)
+    salida.current = decision.estado
+    if (!decision.despachar) {
+      // The recepción is closing: this code has nowhere to go. It is told now, and kept to be told again if the screen stays.
+      mostrar(respuestaDeFallo(textoDeRechazo(codigo)))
+      if (decision.estado.fase === 'cerrada') setSinGuardar(decision.estado.rechazados)
+      return
+    }
+
     if (elegido === null) {
       mostrar(respuestaDeFallo(SIN_COURIER))
       return
@@ -158,17 +181,31 @@ export function RecepcionBarco({ recepcion, couriers }: {
     scan.current?.enfocar()
   }
 
+  /**
+   * What a button that closes the recepción does when its action answered. If it worked the screen goes to the start,
+   * unless a code was refused meanwhile: then it stays, with those codes in view. If it did not, the recepción is still
+   * open: the screen says why, with the codes that were refused (they can be scanned again here), and takes scans again.
+   */
+  function terminarSalida(funciono: boolean, fallo = '') {
+    const fin = terminarDeSalir(salida.current, funciono)
+    salida.current = fin.estado
+    if (!funciono) quedarseConElFallo(agregarNoGuardados(fallo, fin.sinGuardar))
+    else if (fin.navegar) irAlInicio()
+    else setSinGuardar(fin.sinGuardar)
+  }
+
   function enviar() {
     setRespuesta({ tono: 'neutro', texto: 'Enviando a Odoo…', sonido: null })
+    salida.current = empezarASalir(salida.current)
     ejecutar(async () => {
       const resultado = await llamarAccion(() => enviarRecepcionAction(recepcion.id))
       if (!resultado.ok) {
-        quedarseConElFallo(resultado.error)
+        terminarSalida(false, resultado.error)
       } else if (resultado.valor === 'sin_paquetes_validos') {
         // Only duplicados in it: there is nothing to send, and it stays open for somebody to look at.
-        quedarseConElFallo(SIN_PAQUETES_VALIDOS)
+        terminarSalida(false, SIN_PAQUETES_VALIDOS)
       } else {
-        irAlInicio()
+        terminarSalida(true)
       }
     })
   }
@@ -181,10 +218,10 @@ export function RecepcionBarco({ recepcion, couriers }: {
       return
     }
     setRespuesta(null)
+    salida.current = empezarASalir(salida.current)
     ejecutar(async () => {
       const fallo = await textoDeFallo(descartarSiVaciaAction, recepcion.id)
-      if (fallo === null) irAlInicio()
-      else quedarseConElFallo(fallo)
+      terminarSalida(fallo === null, fallo ?? '')
     })
   }
 
@@ -195,16 +232,27 @@ export function RecepcionBarco({ recepcion, couriers }: {
       return
     }
     setRespuesta(null)
+    salida.current = empezarASalir(salida.current)
     ejecutar(async () => {
       const fallo = await textoDeFallo(descartarRecepcionAction, recepcion.id)
-      if (fallo === null) irAlInicio()
-      else quedarseConElFallo(fallo)
+      terminarSalida(fallo === null, fallo ?? '')
     })
   }
 
   return (
     <>
       <CabeceraDeBarco barcoNombre={recepcion.barcoNombre} almacenPrefijo={recepcion.almacenPrefijo} />
+
+      {sinGuardar !== null ? (
+        // The recepción closed while the gun was still firing: the screen waits here until the operario has read which codes
+        // were not saved. The scan field goes on taking codes (and refusing them), so that nothing typed goes nowhere.
+        <div className="banner banner-error recepcion-sin-guardar" role="alert">
+          <p>{textoDeNoGuardados(sinGuardar)}</p>
+          <button type="button" className="btn btn-primary" disabled={saliendo} onPointerDown={noRobarFoco} onClick={irAlInicio}>
+            Volver a Recepción
+          </button>
+        </div>
+      ) : null}
 
       <section aria-labelledby="courier-rotulo">
         <p className="label" id="courier-rotulo">Courier (queda marcado hasta que lo cambies)</p>
