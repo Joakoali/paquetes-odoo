@@ -1,30 +1,17 @@
-import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
-import type { Operario } from '@/db/schema'
 import { operarioHasAlmacen } from '@/lib/admin/operarioAlmacenes'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { getCouriersParaRecepcion } from '@/lib/recepcion/couriers'
 import { getRecepcion, type RecepcionDetalle } from '@/lib/recepcion/recepciones'
 import { textoDeDuplicado } from '@/lib/ui/respuesta-escaneo'
+import { CabeceraDeBarco } from './CabeceraDeBarco'
 import { RecepcionBarco } from './RecepcionBarco'
-
-/**
- * The admin may open any recepción. An operario only those of an almacén they have: the actions check it for
- * what is done on the screen, and this is what keeps the screen itself from showing what is in somebody else's
- * almacén to whoever has its address.
- */
-async function puedeVer(operario: Pick<Operario, 'id' | 'rol'>, almacenId: number): Promise<boolean> {
-  return operario.rol === 'admin' || (await operarioHasAlmacen(operario.id, almacenId))
-}
 
 /** A recepción that was already sent: what it had, to be read. Nothing can be done to it from here. */
 function SoloLectura({ recepcion }: { recepcion: RecepcionDetalle }) {
   return (
     <>
-      <header className="barco-cabecera">
-        <Link href="/recepcion" className="btn-link">‹ Recepciones</Link>
-        <h1 className="barco-nombre">{recepcion.barcoNombre}</h1>
-      </header>
+      <CabeceraDeBarco barcoNombre={recepcion.barcoNombre} almacenPrefijo={recepcion.almacenPrefijo} />
 
       <p className="banner">Esta recepción ya se envió.</p>
 
@@ -54,9 +41,13 @@ export default async function RecepcionBarcoPage({ params }: { params: Promise<{
   const operario = await requireOperarioFromCookies().catch(() => redirect('/login'))
   const { sesionId } = await params
 
-  // The same answer for a recepción that does not exist and for one the operario may not see.
+  // The same answer for a recepción that does not exist and for one the operario may not see. Only an operario who
+  // has its almacén may open it, the admin included: that is what the actions ask of everybody (`exigirAlmacen`), as
+  // `getAlmacenActivo` does, so an admin without the almacén would be given a screen on which every button answers
+  // "No tenés acceso a esto.". It also keeps the screen from showing what is in somebody else's almacén to whoever
+  // has its address.
   const recepcion = await getRecepcion(sesionId)
-  if (recepcion === null || !(await puedeVer(operario, recepcion.almacenId))) notFound()
+  if (recepcion === null || !(await operarioHasAlmacen(operario.id, recepcion.almacenId))) notFound()
 
   if (recepcion.estado !== 'en_curso') {
     return (

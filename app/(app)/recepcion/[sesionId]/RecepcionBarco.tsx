@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useReducer, useRef, useState, useTransition } from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { CourierPicker } from '@/components/courier-picker'
 import { ScanInput, type ScanInputHandle } from '@/components/scan-input'
@@ -21,6 +20,7 @@ import { llamarAccion, textoDeFallo } from '@/lib/ui/textoDeFallo'
 import {
   borrarPaqueteAction, descartarRecepcionAction, descartarSiVaciaAction, enviarRecepcionAction, escanearAction,
 } from '../actions'
+import { CabeceraDeBarco } from './CabeceraDeBarco'
 
 const SIN_PAQUETES_VALIDOS = 'No hay nada para enviar: los paquetes que escaneaste ya están en Odoo.'
 
@@ -204,10 +204,7 @@ export function RecepcionBarco({ recepcion, couriers }: {
 
   return (
     <>
-      <header className="barco-cabecera">
-        <Link href="/recepcion" className="btn-link" onPointerDown={noRobarFoco}>‹ Recepciones</Link>
-        <h1 className="barco-nombre">{recepcion.barcoNombre}</h1>
-      </header>
+      <CabeceraDeBarco barcoNombre={recepcion.barcoNombre} almacenPrefijo={recepcion.almacenPrefijo} />
 
       <section aria-labelledby="courier-rotulo">
         <p className="label" id="courier-rotulo">Courier (queda marcado hasta que lo cambies)</p>

@@ -755,6 +755,19 @@ details[open] > summary::before {
   overflow-wrap: anywhere;
 }
 
+/* The almacén of the recepción, at the right of the header, as the pill of the mockup. */
+.barco-almacen {
+  margin-left: auto;
+  padding: 0.25rem 0.75rem;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 /* The couriers. */
 .chips {
   display: flex;

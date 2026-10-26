@@ -1,7 +1,7 @@
 import { and, asc, count, desc, eq, gte, inArray, notExists, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
-  barcosCache, couriers, sesionCourierBatches, sesionItems, sesionesEscaneo,
+  almacenes, barcosCache, couriers, sesionCourierBatches, sesionItems, sesionesEscaneo,
   type SesionEscaneo,
 } from '../../db/schema'
 import { registrarAuditoria } from '../audit'
@@ -549,6 +549,8 @@ export async function listarEnviadasHoy(almacenId: number, ahora: Date = new Dat
 export interface RecepcionDetalle {
   id: string
   almacenId: number
+  /** The prefix of that almacén ("MB92"), which is how the operarios call it. */
+  almacenPrefijo: string
   barcoOdooId: number
   barcoNombre: string
   estado: SesionEscaneo['estado']
@@ -570,11 +572,13 @@ export async function getRecepcion(sesionId: string): Promise<RecepcionDetalle |
     db.select({
       id: sesionesEscaneo.id,
       almacenId: sesionesEscaneo.almacenId,
+      almacenPrefijo: almacenes.prefijo,
       barcoOdooId: sesionesEscaneo.barcoOdooId,
       barcoNombre: barcosCache.nombre,
       estado: sesionesEscaneo.estado,
     })
       .from(sesionesEscaneo)
+      .innerJoin(almacenes, eq(almacenes.id, sesionesEscaneo.almacenId))
       .leftJoin(barcosCache, eq(barcosCache.odooId, sesionesEscaneo.barcoOdooId))
       .where(and(eq(sesionesEscaneo.id, sesionId), eq(sesionesEscaneo.tipo, 'recepcion'))),
     db.select({
@@ -598,6 +602,7 @@ export async function getRecepcion(sesionId: string): Promise<RecepcionDetalle |
   return {
     id: sesion.id,
     almacenId: sesion.almacenId,
+    almacenPrefijo: sesion.almacenPrefijo,
     barcoOdooId: sesion.barcoOdooId,
     barcoNombre: nombreDeBarco(sesion.barcoNombre, sesion.barcoOdooId),
     estado: sesion.estado,

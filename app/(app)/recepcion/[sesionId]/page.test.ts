@@ -28,7 +28,9 @@ const admin = { id: 'admin-1', nombre: 'Joaquín', rol: 'admin' } as Operario
 const couriers = { frecuentes: [{ id: 1, nombre: 'DHL' }], todos: [{ id: 1, nombre: 'DHL' }, { id: 2, nombre: 'UPS' }] }
 
 function recepcion(datos: Partial<RecepcionDetalle> = {}): RecepcionDetalle {
-  return { id: SESION, almacenId: 4, barcoOdooId: 77, barcoNombre: 'MAYANQUEEN', estado: 'en_curso', paquetes: [], ...datos }
+  return {
+    id: SESION, almacenId: 4, almacenPrefijo: 'MAD1', barcoOdooId: 77, barcoNombre: 'MAYANQUEEN', estado: 'en_curso', paquetes: [], ...datos,
+  }
 }
 
 beforeEach(() => {
@@ -99,12 +101,22 @@ describe('RecepcionBarcoPage', () => {
       expect(operarioHasAlmacen).toHaveBeenCalledWith('operario-1', 4)
     })
 
-    it('shows it to the admin, whatever almacenes they have', async () => {
+    it('is not found for an admin who does not have the almacén either: the actions would refuse them everything', async () => {
       vi.mocked(requireOperarioFromCookies).mockResolvedValue(admin)
       vi.mocked(operarioHasAlmacen).mockResolvedValue(false)
 
+      await expect(pagina()).rejects.toThrow('NEXT_NOT_FOUND')
+
+      expect(operarioHasAlmacen).toHaveBeenCalledWith('admin-1', 4)
+      expect(getCouriersParaRecepcion).not.toHaveBeenCalled()
+    })
+
+    it('shows it to an admin who has the almacén, as to anybody else', async () => {
+      vi.mocked(requireOperarioFromCookies).mockResolvedValue(admin)
+
       const resultado = await pagina()
 
+      expect(operarioHasAlmacen).toHaveBeenCalledWith('admin-1', 4)
       expect(buscar(resultado, RecepcionBarco)).toBeDefined()
     })
   })
@@ -146,6 +158,7 @@ describe('RecepcionBarcoPage', () => {
       expect(buscar(resultado, RecepcionBarco)).toBeUndefined()
       expect(html).toContain('Esta recepción ya se envió.')
       expect(html).toContain('MAYANQUEEN')
+      expect(html).toContain('MAD1')
       expect(html).toMatch(/<a[^>]*href="\/recepcion"/)
     })
 

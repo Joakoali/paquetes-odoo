@@ -1362,6 +1362,7 @@ describe('getRecepcion', () => {
     expect(detalle).toEqual({
       id: sesion.id,
       almacenId: mb92.id,
+      almacenPrefijo: 'MB92',
       barcoOdooId: 673,
       barcoNombre: 'MAYANQUEEN',
       estado: 'en_curso',
@@ -1402,6 +1403,15 @@ describe('getRecepcion', () => {
     expect(detalle?.estado).toBe('sincronizada')
     // Whatever is not a duplicado is a package that counts, whether it already went to Odoo or not.
     expect(detalle?.paquetes.map((p) => [p.trackingNumber, p.estado]).sort()).toEqual([['A1', 'ok'], ['A2', 'duplicado']])
+  })
+
+  it('gives the prefix of the almacén of the recepción itself, not of another one', async () => {
+    const mad1 = await seedAlmacen(db, { prefijo: 'MAD1', nombre: 'Madrid (MAD1)', odooWarehouseId: 2, odooInTypeId: 3, odooOutTypeId: 4 })
+    const enMadrid = await crearSesion({ almacenId: mad1.id })
+    const enBarcelona = await crearSesion({ barcoOdooId: 674 })
+
+    expect(await getRecepcion(enMadrid.id)).toMatchObject({ almacenId: mad1.id, almacenPrefijo: 'MAD1' })
+    expect(await getRecepcion(enBarcelona.id)).toMatchObject({ almacenId: mb92.id, almacenPrefijo: 'MB92' })
   })
 
   it('names a barco that is not in the cache by its id', async () => {
