@@ -5,10 +5,11 @@ vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/tes
 import { eq } from 'drizzle-orm'
 import { db } from '@/db/client'
 import { almacenes, operarioAlmacenes, type Almacen, type Operario } from '@/db/schema'
+import { ErrorParaOperario } from '@/lib/errores'
 import { seedAlmacen, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import {
-  getAlmacenesForOperario, listAlmacenesActivos, operarioHasAlmacen, setAlmacenesForOperario,
+  getAlmacenesForOperario, listAlmacenesActivos, listAlmacenesParaAsignar, operarioHasAlmacen, setAlmacenesForOperario,
 } from './operarioAlmacenes'
 
 let operario: Operario
@@ -63,47 +64,90 @@ describe('operario almacenes', () => {
   })
 
   describe('the links to almacenes that went inactive', () => {
-    // What the admin form shows is the active ones only, so a save can only speak for those: a link to an almacén a
-    // refresh deactivated is not the form's to drop, and it has to be there if that almacén comes back from Odoo.
-    it('survive a save that replaces the active ones', async () => {
+    // The form lists them, labelled "inactivo", next to the active ones: a save speaks for every one of them, so the admin
+    // can take them away. They grant access (`operarioHasAlmacen` only looks at the link) and nothing else could revoke them.
+    it('are taken away by a save that leaves them unticked', async () => {
       await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
       await desactivar(barcelona)
 
-      await setAlmacenesForOperario(operario.id, [valencia.id])
+      await setAlmacenesForOperario(operario.id, [madrid.id, valencia.id])
 
-      expect(await enlaces(operario)).toEqual([barcelona.id, valencia.id])
-      expect(await getAlmacenesForOperario(operario.id)).toEqual([valencia])
+      expect(await enlaces(operario)).toEqual([madrid.id, valencia.id])
+      expect(await operarioHasAlmacen(operario.id, barcelona.id)).toBe(false)
     })
 
-    it('survive a save with nothing chosen', async () => {
+    it('are taken away by a save with nothing chosen', async () => {
       await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
       await desactivar(barcelona)
 
       await setAlmacenesForOperario(operario.id, [])
 
-      expect(await enlaces(operario)).toEqual([barcelona.id])
+      expect(await enlaces(operario)).toEqual([])
     })
 
-    it('are back when the almacén is active again', async () => {
+    it('are kept by a save that leaves them ticked', async () => {
       await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
       await desactivar(barcelona)
-      await setAlmacenesForOperario(operario.id, [madrid.id, valencia.id])
+
+      await setAlmacenesForOperario(operario.id, [barcelona.id, valencia.id])
+
+      expect(await enlaces(operario)).toEqual([barcelona.id, valencia.id])
+      expect(await getAlmacenesForOperario(operario.id)).toEqual([valencia])
+    })
+
+    it('are back when the almacén is active again, if the save kept them', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      await desactivar(barcelona)
+      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
 
       await db.update(almacenes).set({ activo: true }).where(eq(almacenes.id, barcelona.id))
 
-      expect((await getAlmacenesForOperario(operario.id)).map((a) => a.id)).toEqual([barcelona.id, madrid.id, valencia.id])
+      expect((await getAlmacenesForOperario(operario.id)).map((a) => a.id)).toEqual([barcelona.id, madrid.id])
+    })
+  })
+
+  describe('an almacén that is inactive and that the operario is not linked to', () => {
+    it('cannot be submitted: the save is refused with a message for the admin, and nothing changes', async () => {
+      await setAlmacenesForOperario(operario.id, [madrid.id])
+      await desactivar(valencia)
+
+      const error = await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id, valencia.id]).catch((e) => e)
+
+      expect(error).toBeInstanceOf(ErrorParaOperario)
+      expect(error.message).toBe('Algunos de los almacenes elegidos no están disponibles. Recargá la pantalla y volvé a elegir.')
+      // Not even the active ones that came along with it were saved.
+      expect(await enlaces(operario)).toEqual([madrid.id])
     })
 
-    it('do not make a save fail when a stale form sends one of them again', async () => {
-      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
-      // The form was drawn while Barcelona was active, and is saved after a refresh deactivated it.
-      await desactivar(barcelona)
+    it('is not allowed because ANOTHER operario is linked to it', async () => {
+      await setAlmacenesForOperario(otro.id, [valencia.id])
+      await desactivar(valencia)
 
-      await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+      await expect(setAlmacenesForOperario(operario.id, [valencia.id])).rejects.toBeInstanceOf(ErrorParaOperario)
 
-      expect(await enlaces(operario)).toEqual([madrid.id, barcelona.id])
+      expect(await enlaces(operario)).toEqual([])
+      expect(await enlaces(otro)).toEqual([valencia.id])
     })
 
+    it('is refused even when it is all that is submitted', async () => {
+      await desactivar(valencia)
+
+      await expect(setAlmacenesForOperario(operario.id, [valencia.id])).rejects.toBeInstanceOf(ErrorParaOperario)
+    })
+  })
+
+  it('refuses an almacén that does not exist, with the same message, and changes nothing', async () => {
+    await setAlmacenesForOperario(operario.id, [madrid.id])
+
+    await expect(setAlmacenesForOperario(operario.id, [madrid.id, 99999])).rejects.toBeInstanceOf(ErrorParaOperario)
+
+    expect(await enlaces(operario)).toEqual([madrid.id])
+  })
+
+  it('takes an almacén listed twice once', async () => {
+    await setAlmacenesForOperario(operario.id, [madrid.id, madrid.id])
+
+    expect(await enlaces(operario)).toEqual([madrid.id])
   })
 
   it('does not touch the assignments of other operarios', async () => {
@@ -193,5 +237,57 @@ describe('listAlmacenesActivos', () => {
     await Promise.all([madrid, barcelona, valencia].map(desactivar))
 
     expect(await listAlmacenesActivos()).toEqual([])
+  })
+})
+
+describe('listAlmacenesParaAsignar', () => {
+  it('lists every active almacén, ticked or not, and says which ones the operario has', async () => {
+    await setAlmacenesForOperario(operario.id, [barcelona.id])
+
+    const lista = await listAlmacenesParaAsignar(operario.id)
+
+    expect(lista.map((a) => [a.id, a.asignado, a.activo])).toEqual([
+      [barcelona.id, true, true], [madrid.id, false, true], [valencia.id, false, true],
+    ])
+  })
+
+  it('adds the inactive almacenes the operario is linked to, marked as inactive: they have to be there to be taken away', async () => {
+    await setAlmacenesForOperario(operario.id, [madrid.id, barcelona.id])
+    await desactivar(barcelona)
+
+    const lista = await listAlmacenesParaAsignar(operario.id)
+
+    expect(lista.map((a) => [a.id, a.asignado, a.activo])).toEqual([
+      [barcelona.id, true, false], [madrid.id, true, true], [valencia.id, false, true],
+    ])
+  })
+
+  it('does not show an inactive almacén the operario is not linked to, even if someone else is', async () => {
+    await setAlmacenesForOperario(otro.id, [valencia.id])
+    await desactivar(valencia)
+
+    expect((await listAlmacenesParaAsignar(operario.id)).map((a) => a.id)).toEqual([barcelona.id, madrid.id])
+    expect((await listAlmacenesParaAsignar(otro.id)).map((a) => a.id)).toEqual([barcelona.id, madrid.id, valencia.id])
+  })
+
+  it('lists each almacén once, whoever else is linked to it', async () => {
+    await setAlmacenesForOperario(operario.id, [madrid.id])
+    await setAlmacenesForOperario(otro.id, [madrid.id])
+
+    expect((await listAlmacenesParaAsignar(operario.id)).map((a) => a.id)).toEqual([barcelona.id, madrid.id, valencia.id])
+  })
+
+  it('sorts by name without caring about capitals, and by id when two are the same', async () => {
+    const minuscula = await seedAlmacen(db, { prefijo: 'ALC1', nombre: 'alicante', odooWarehouseId: 4 })
+    const gemelaDeMadrid = await seedAlmacen(db, { prefijo: 'MAD2', nombre: 'Madrid', odooWarehouseId: 5 })
+
+    expect((await listAlmacenesParaAsignar(operario.id)).map((a) => a.id))
+      .toEqual([minuscula.id, barcelona.id, madrid.id, gemelaDeMadrid.id, valencia.id])
+  })
+
+  it('is empty when there is no almacén that is active or linked', async () => {
+    await Promise.all([madrid, barcelona, valencia].map(desactivar))
+
+    expect(await listAlmacenesParaAsignar(operario.id)).toEqual([])
   })
 })

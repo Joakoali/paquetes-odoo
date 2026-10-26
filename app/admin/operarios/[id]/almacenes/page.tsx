@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import { eq } from 'drizzle-orm'
 import { db } from '@/db/client'
 import { operarios } from '@/db/schema'
-import { getAlmacenesForOperario, listAlmacenesActivos } from '@/lib/admin/operarioAlmacenes'
+import { listAlmacenesParaAsignar } from '@/lib/admin/operarioAlmacenes'
 import { requireAdminFromCookies } from '@/lib/auth/current-operario'
 import { FormAlmacenes } from './FormAlmacenes'
 
@@ -18,8 +18,9 @@ export default async function OperarioAlmacenesPage({ params }: { params: Promis
     : undefined
   if (!operario) notFound()
 
-  // Only the active almacenes: the ones Odoo no longer has cannot be worked in, so there is nothing to choose there.
-  const [activos, asignados] = await Promise.all([listAlmacenesActivos(), getAlmacenesForOperario(id)])
+  // Every active almacén, and the inactive ones the operario is still linked to: those still give access, and the form
+  // is the only way to take them away.
+  const almacenes = await listAlmacenesParaAsignar(id)
 
   return (
     <main className="page">
@@ -27,13 +28,13 @@ export default async function OperarioAlmacenesPage({ params }: { params: Promis
         <Link href="/admin/operarios" className="btn-link">‹ Operarios</Link>
         <h1 className="barco-nombre">Almacenes de {operario.nombre}</h1>
       </header>
-      {activos.length === 0 ? (
+      {almacenes.length === 0 ? (
         <p>No hay almacenes activos. Se cargan solos desde Odoo: probá refrescar en Datos de Odoo.</p>
       ) : (
         <FormAlmacenes
           operarioId={id}
-          almacenes={activos.map(({ id: almacenId, prefijo, nombre }) => ({ id: almacenId, prefijo, nombre }))}
-          asignados={asignados.map((almacen) => almacen.id)}
+          almacenes={almacenes.map(({ id: almacenId, prefijo, nombre, activo }) => ({ id: almacenId, prefijo, nombre, activo }))}
+          asignados={almacenes.filter((almacen) => almacen.asignado).map((almacen) => almacen.id)}
         />
       )}
     </main>

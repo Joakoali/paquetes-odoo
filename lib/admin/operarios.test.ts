@@ -74,25 +74,37 @@ describe('listOperariosConAlmacenes', () => {
     ])
   })
 
-  it('leaves out the almacenes that are no longer active', async () => {
+  it('shows the almacenes that are no longer active too, marked: they still give access, so the admin has to see them', async () => {
     const operario = await seedOperario(db)
     const mb92 = await nuevaAlmacen('MB92', 1)
     const mlc = await nuevaAlmacen('MLC', 2)
     await setAlmacenesForOperario(operario.id, [mb92.id, mlc.id])
     await db.update(almacenes).set({ activo: false }).where(eq(almacenes.id, mlc.id))
 
-    expect((await listOperariosConAlmacenes())[0].almacenes).toEqual(['MB92'])
+    expect((await listOperariosConAlmacenes())[0].almacenes).toEqual(['MB92', 'MLC (inactivo)'])
   })
 
-  it('lists an operario with no almacén, or with only inactive ones, with an empty list', async () => {
+  it('keeps the prefixes in alphabetical order, the inactive ones among the rest', async () => {
+    const operario = await seedOperario(db)
+    const tgn = await nuevaAlmacen('TGN', 3)
+    const mlc = await nuevaAlmacen('MLC', 2)
+    const mb92 = await nuevaAlmacen('MB92', 1)
+    await setAlmacenesForOperario(operario.id, [tgn.id, mlc.id, mb92.id])
+    await db.update(almacenes).set({ activo: false }).where(eq(almacenes.id, mb92.id))
+
+    expect((await listOperariosConAlmacenes())[0].almacenes).toEqual(['MB92 (inactivo)', 'MLC', 'TGN'])
+  })
+
+  it('lists an operario with no almacén with an empty list, and one with only inactive ones with those, marked', async () => {
     const sinNada = await seedOperario(db, { nombre: 'Sin nada' })
     const soloInactivos = await seedOperario(db, { nombre: 'Solo inactivos' })
-    const mlc = await nuevaAlmacen('MLC', 1, { activo: false })
+    const mlc = await nuevaAlmacen('MLC', 1)
     await setAlmacenesForOperario(soloInactivos.id, [mlc.id])
+    await db.update(almacenes).set({ activo: false }).where(eq(almacenes.id, mlc.id))
 
     const lista = await listOperariosConAlmacenes()
 
-    expect(lista.map((o) => [o.id, o.almacenes])).toEqual([[sinNada.id, []], [soloInactivos.id, []]])
+    expect(lista.map((o) => [o.id, o.almacenes])).toEqual([[sinNada.id, []], [soloInactivos.id, ['MLC (inactivo)']]])
   })
 
   it('gives every column of the operario, the inactive ones and the admins included', async () => {

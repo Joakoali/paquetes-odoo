@@ -8,14 +8,15 @@ import { updateAlmacenesAction } from './actions'
  * The almacenes the admin can tick for an operario, and the button that saves them. It stays disabled while the
  * action runs, and says in words that it was saved, or why it was not (what was ticked stays on screen in that case).
  *
- * Only what the page gives it is on screen: the active almacenes. Saving speaks for those alone, which is why the
- * ones that went inactive are not in `almacenes` and are not lost by saving.
+ * What the page gives it is on screen: the active almacenes and the inactive ones the operario is still linked to,
+ * labelled. Saving speaks for every one of them: what is ticked is what the operario has afterwards, so unticking an
+ * inactive one takes it away.
  *
  * Nothing here but `import type` may come from lib/acciones.ts: it is server-only.
  */
 export function FormAlmacenes({ operarioId, almacenes, asignados }: {
   operarioId: string
-  almacenes: Array<{ id: number; prefijo: string; nombre: string }>
+  almacenes: Array<{ id: number; prefijo: string; nombre: string; activo: boolean }>
   /** The ids of the almacenes the operario has now. */
   asignados: number[]
 }) {
@@ -34,6 +35,9 @@ export function FormAlmacenes({ operarioId, almacenes, asignados }: {
 
   return (
     <form className="form-almacenes" onSubmit={guardar}>
+      {almacenes.some((almacen) => !almacen.activo) ? (
+        <p className="fila-meta">Los almacenes inactivos ya no están en Odoo, pero siguen dando acceso. Destildalos para sacárselos.</p>
+      ) : null}
       <ul className="list">
         {almacenes.map((almacen) => (
           <li key={almacen.id}>
@@ -43,6 +47,7 @@ export function FormAlmacenes({ operarioId, almacenes, asignados }: {
                 <span className="fila-nombre">{almacen.nombre}</span>
                 <span className="fila-meta mono">{almacen.prefijo}</span>
               </span>
+              {almacen.activo ? null : <span className="badge">inactivo</span>}
             </label>
           </li>
         ))}

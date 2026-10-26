@@ -8,9 +8,10 @@ import { requireAdminFromCookies } from '@/lib/auth/current-operario'
 import { ErrorParaOperario } from '@/lib/errores'
 
 /**
- * Saves the almacenes of an operario: the ones chosen replace the ones they have that are active (the links to
- * almacenes that went inactive stay, see `setAlmacenesForOperario`). The ids come from the client like everything
- * else, and a value that is not a whole number would only come back from the database as an error nobody can read.
+ * Saves the almacenes of an operario: the ones chosen replace all the ones they have, the links to almacenes that went
+ * inactive included (see `setAlmacenesForOperario`, which refuses an almacén that is not active or already theirs).
+ * The ids come from the client like everything else, and a value that is not a whole number would only come back from
+ * the database as an error nobody can read.
  */
 export async function updateAlmacenesAction(operarioId: string, almacenIds: number[]): Promise<ResultadoAccion> {
   return ejecutarAccion(async () => {

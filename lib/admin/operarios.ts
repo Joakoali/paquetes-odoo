@@ -8,24 +8,27 @@ export async function listOperarios(): Promise<Operario[]> {
   return db.query.operarios.findMany()
 }
 
+/** What the admin list says next to the prefix of an almacén that went inactive. */
+const MARCA_INACTIVO = ' (inactivo)'
+
 /**
- * Every operario (the inactive ones and the admins too) with the prefixes of the almacenes they have that
- * are still active, in alphabetical order: what the admin list shows. By name, ignoring capitals (as
- * `getAlmacenesForOperario` does), and by id when two have the same name, so the list never moves between visits.
+ * Every operario (the inactive ones and the admins too) with the prefixes of the almacenes they have, in alphabetical
+ * order: what the admin list shows. The ones that went inactive are there too, marked ("MLC (inactivo)"): the link still
+ * gives access, so the admin has to see it to take it away. By name, ignoring capitals (as `getAlmacenesForOperario`
+ * does), and by id when two have the same name, so the list never moves between visits.
  */
 export async function listOperariosConAlmacenes(): Promise<Array<Operario & { almacenes: string[] }>> {
   const [lista, enlaces] = await Promise.all([
     db.select().from(operarios).orderBy(asc(sql`lower(${operarios.nombre})`), asc(operarios.id)),
-    db.select({ operarioId: operarioAlmacenes.operarioId, prefijo: almacenes.prefijo })
+    db.select({ operarioId: operarioAlmacenes.operarioId, prefijo: almacenes.prefijo, activo: almacenes.activo })
       .from(operarioAlmacenes)
       .innerJoin(almacenes, eq(almacenes.id, operarioAlmacenes.almacenId))
-      .where(eq(almacenes.activo, true))
       .orderBy(asc(almacenes.prefijo)),
   ])
 
   const prefijosDe = new Map<string, string[]>()
-  for (const { operarioId, prefijo } of enlaces) {
-    prefijosDe.set(operarioId, [...(prefijosDe.get(operarioId) ?? []), prefijo])
+  for (const { operarioId, prefijo, activo } of enlaces) {
+    prefijosDe.set(operarioId, [...(prefijosDe.get(operarioId) ?? []), activo ? prefijo : `${prefijo}${MARCA_INACTIVO}`])
   }
   return lista.map((operario) => ({ ...operario, almacenes: prefijosDe.get(operario.id) ?? [] }))
 }

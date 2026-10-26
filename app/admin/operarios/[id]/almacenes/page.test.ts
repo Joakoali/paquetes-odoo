@@ -9,7 +9,7 @@ import { eq } from 'drizzle-orm'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { notFound } from 'next/navigation'
 import { db } from '@/db/client'
-import { almacenes, type Almacen, type Operario } from '@/db/schema'
+import { almacenes, operarioAlmacenes, type Almacen, type Operario } from '@/db/schema'
 import { setAlmacenesForOperario } from '@/lib/admin/operarioAlmacenes'
 import { ForbiddenError } from '@/lib/auth/guards'
 import { requireAdminFromCookies } from '@/lib/auth/current-operario'
@@ -44,31 +44,62 @@ beforeEach(async () => {
 const html = async (id: string) => renderToStaticMarkup(await OperarioAlmacenesPage({ params: Promise.resolve({ id }) }))
 
 describe('OperarioAlmacenesPage', () => {
-  it('lists the active almacenes only, and says whose they are', async () => {
+  it('lists the active almacenes and says whose they are', async () => {
     const pagina = await html(operario.id)
 
     expect(pagina).toContain('Almacenes de Veronika')
     expect(pagina).toContain('MB92 - Barcelona')
     expect(pagina).toContain('MPV - Port Vell')
-    expect(pagina).not.toContain('MLC')
   })
 
-  it('ticks the almacenes the operario has and only those', async () => {
+  it('lists an inactive almacén the operario is linked to, labelled "inactivo": it still gives access, and has to be there to be taken away', async () => {
+    const pagina = await html(operario.id)
+
+    const filas = pagina.split('<li')
+    const fila = (texto: string) => filas.find((f) => f.includes(texto)) ?? ''
+    expect(fila('MLC - Mallorca')).toContain('inactivo')
+    // Only the inactive one is labelled.
+    expect(fila('MB92 - Barcelona')).not.toContain('inactivo')
+    expect(fila('MPV - Port Vell')).not.toContain('inactivo')
+  })
+
+  it('does not list an inactive almacén the operario is not linked to', async () => {
+    const mzz = await seedAlmacen(db, { prefijo: 'MZZ', nombre: 'MZZ - Cerrado', odooWarehouseId: 4 })
+    // Another operario has it: it is still not something to offer this one.
+    await setAlmacenesForOperario(admin.id, [mzz.id])
+    await db.update(almacenes).set({ activo: false }).where(eq(almacenes.id, mzz.id))
+
+    expect(await html(operario.id)).not.toContain('MZZ')
+  })
+
+  it('ticks the almacenes the operario has, the inactive one included, and only those', async () => {
     const pagina = await html(operario.id)
 
     const casillas = pagina.match(/<input[^>]*type="checkbox"[^>]*>/g) ?? []
-    expect(casillas).toHaveLength(2)
+    expect(casillas).toHaveLength(3)
     expect(casillas.find((c) => c.includes(`value="${mb92.id}"`))).toContain('checked')
+    expect(casillas.find((c) => c.includes(`value="${mlc.id}"`))).toContain('checked')
     expect(casillas.find((c) => c.includes(`value="${mpv.id}"`))).not.toContain('checked')
   })
 
-  it('says there is nothing to choose when no almacén is active', async () => {
+  it('says there is nothing to choose when no almacén is active and the operario has none', async () => {
     await db.update(almacenes).set({ activo: false })
+    await db.delete(operarioAlmacenes)
 
     const pagina = await html(operario.id)
 
     expect(pagina).toContain('No hay almacenes activos')
     expect(pagina).not.toContain('type="checkbox"')
+  })
+
+  it('still lists the almacenes the operario is linked to when none is active: they are what the admin can take away', async () => {
+    await db.update(almacenes).set({ activo: false })
+
+    const pagina = await html(operario.id)
+
+    expect(pagina).not.toContain('No hay almacenes activos')
+    expect(pagina).toContain('MB92 - Barcelona')
+    expect(pagina).toContain('MLC - Mallorca')
   })
 
   it.each([
