@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
-// Nothing here reaches Odoo: the four calls that have their own module are replaced, and so is odooCall,
+// Nothing here reaches Odoo: the calls that have their own module are replaced, and so is odooCall,
 // which is what the worker uses to read the picking and to leave the note and Recibido por.
 vi.mock('@/lib/odoo/pickings', () => ({
   checkDuplicateTrackingNumbers: vi.fn(),
   createIncomingPicking: vi.fn(),
   addCourierMoveWithLines: vi.fn(),
+  resumeCourierMoveWithLines: vi.fn(),
   validatePicking: vi.fn(),
 }))
 vi.mock('@/lib/odoo/client', () => ({ odooCall: vi.fn() }))
@@ -24,10 +25,10 @@ import {
   type Almacen, type Courier, type Operario,
 } from '@/db/schema'
 import { recordSyncedTrackings } from '@/lib/cache/trackingActivos'
-import { ConfiguracionError } from '@/lib/errores'
+import { clasificarError, ConfiguracionError, RespuestaOdooInesperadaError } from '@/lib/errores'
 import { odooCall } from '@/lib/odoo/client'
 import {
-  addCourierMoveWithLines, checkDuplicateTrackingNumbers, createIncomingPicking, validatePicking,
+  addCourierMoveWithLines, checkDuplicateTrackingNumbers, createIncomingPicking, resumeCourierMoveWithLines, validatePicking,
 } from '@/lib/odoo/pickings'
 import { seedAlmacen, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
@@ -80,6 +81,7 @@ beforeEach(async () => {
   vi.mocked(checkDuplicateTrackingNumbers).mockResolvedValue(new Map())
   vi.mocked(createIncomingPicking).mockResolvedValue(PICKING_ID)
   vi.mocked(addCourierMoveWithLines).mockImplementation(async (_pickingId, productId) => 900 + productId)
+  vi.mocked(resumeCourierMoveWithLines).mockImplementation(async (_pickingId, productId) => 900 + productId)
   vi.mocked(validatePicking).mockResolvedValue(undefined)
   vi.mocked(odooCall).mockImplementation(async (modelo, metodo, params) => odooResponde(modelo, metodo, params) as never)
 })
@@ -226,7 +228,7 @@ describe('syncRecepcionSession', () => {
     // The locations and the name in one read, then the state before validating; nothing per batch or per package.
     expect(vi.mocked(odooCall).mock.calls.map(([, metodo]) => metodo)).toEqual(['read', 'read', 'message_post', 'write'])
     expect(vi.mocked(odooCall).mock.calls[0]).toEqual([
-      'stock.picking', 'read', { ids: [PICKING_ID], fields: ['location_id', 'location_dest_id', 'name'] },
+      'stock.picking', 'read', { ids: [PICKING_ID], fields: ['location_id', 'location_dest_id', 'name', 'state'] },
     ])
     const orden = {
       crear: vi.mocked(createIncomingPicking).mock.invocationCallOrder[0],
@@ -572,10 +574,21 @@ describe('syncRecepcionSession', () => {
       await syncRecepcionSession(sesion.id)
 
       expect(createIncomingPicking).not.toHaveBeenCalled()
-      expect(addCourierMoveWithLines).toHaveBeenCalledWith(PICKING_ID, 11, ['T1'], 1, 5)
+      // The picking is from an earlier attempt, which may have made the move: it is looked up before one is made.
+      expect(resumeCourierMoveWithLines).toHaveBeenCalledWith(PICKING_ID, 11, ['T1'], 1, 5)
+      expect(addCourierMoveWithLines).not.toHaveBeenCalled()
       expect(await filaSesion(sesion.id)).toMatchObject({
         estado: 'sincronizada', odooPickingId: PICKING_ID, odooPickingRef: PICKING_REF,
       })
+    })
+
+    it('makes the moves of a picking it has just made without looking anything up first', async () => {
+      const sesion = await crearRecepcion([{ courier: dhl, paquetes: [{ tracking: 'T1' }] }])
+
+      await syncRecepcionSession(sesion.id)
+
+      expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
+      expect(resumeCourierMoveWithLines).not.toHaveBeenCalled()
     })
 
     it('skips a batch that already has its move, and does not look its packages up as duplicates', async () => {
@@ -591,8 +604,9 @@ describe('syncRecepcionSession', () => {
 
       // T1 is already in the picking: looking it up would find itself and flag it as its own duplicate.
       expect(checkDuplicateTrackingNumbers).toHaveBeenCalledWith(['T2'])
-      expect(addCourierMoveWithLines).toHaveBeenCalledTimes(1)
-      expect(addCourierMoveWithLines).toHaveBeenCalledWith(PICKING_ID, 12, ['T2'], 1, 5)
+      expect(resumeCourierMoveWithLines).toHaveBeenCalledTimes(1)
+      expect(resumeCourierMoveWithLines).toHaveBeenCalledWith(PICKING_ID, 12, ['T2'], 1, 5)
+      expect(addCourierMoveWithLines).not.toHaveBeenCalled()
       expect(await movimientos(sesion.id)).toEqual([
         { courierId: dhl.id, odooMoveId: 900 },
         { courierId: gls.id, odooMoveId: 912 },
@@ -621,8 +635,8 @@ describe('syncRecepcionSession', () => {
       expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', odooPickingRef: PICKING_REF })
     })
 
-    it.each(['done', 'cancel'])('does not validate a picking that Odoo already has in state %s, but finishes the sync', async (estado) => {
-      estadoDelPicking = estado
+    it('does not validate a picking that Odoo already has done, but finishes the sync', async () => {
+      estadoDelPicking = 'done'
       const sesion = await crearRecepcion([{ courier: dhl, paquetes: [{ tracking: 'T1' }] }])
 
       await syncRecepcionSession(sesion.id)
@@ -630,6 +644,40 @@ describe('syncRecepcionSession', () => {
       expect(validatePicking).not.toHaveBeenCalled()
       expect(llamadasAOdoo('stock.picking', 'message_post')).toHaveLength(1)
       expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
+    })
+
+    it('fails, and does not finish the sync, for a picking that somebody cancelled in Odoo', async () => {
+      estadoDelPicking = 'cancel'
+      const sesion = await crearRecepcion([{ courier: dhl, paquetes: [{ tracking: 'T1' }] }], { odooPickingId: PICKING_ID })
+
+      const error = await syncRecepcionSession(sesion.id).catch((e) => e)
+
+      expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+      expect(error.message).toBe('El albarán se canceló en Odoo.')
+      expect(clasificarError(error)).toBe('odoo') // a retry would not bring it back
+      // Found out before anything is put in it, and before the cache is told the packages are in Odoo.
+      expect(resumeCourierMoveWithLines).not.toHaveBeenCalled()
+      expect(addCourierMoveWithLines).not.toHaveBeenCalled()
+      expect(recordSyncedTrackings).not.toHaveBeenCalled()
+      expect(validatePicking).not.toHaveBeenCalled()
+      expect(llamadasAOdoo('stock.picking', 'message_post')).toEqual([])
+      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', syncedAt: null })
+    })
+
+    it('fails for a picking that is cancelled by the time it would be validated, and posts nothing on it', async () => {
+      const sesion = await crearRecepcion([{ courier: dhl, paquetes: [{ tracking: 'T1' }] }])
+      // Not cancelled when the locations are read, cancelled when the state is read again before validating.
+      let lecturas = 0
+      vi.mocked(odooCall).mockImplementation(async (modelo, metodo, params) => {
+        if (modelo === 'stock.picking' && metodo === 'read' && ++lecturas === 2) return [{ id: PICKING_ID, state: 'cancel' }] as never
+        return odooResponde(modelo, metodo, params) as never
+      })
+
+      await expect(syncRecepcionSession(sesion.id)).rejects.toThrow('El albarán se canceló en Odoo.')
+
+      expect(validatePicking).not.toHaveBeenCalled()
+      expect(llamadasAOdoo('stock.picking', 'message_post')).toEqual([])
+      expect((await filaSesion(sesion.id)).estado).toBe('confirmada_pendiente_sync')
     })
 
     it('throws a readable error when the picking no longer exists in Odoo', async () => {

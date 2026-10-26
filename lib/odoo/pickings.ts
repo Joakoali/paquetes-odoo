@@ -67,6 +67,25 @@ export async function createIncomingPicking(almacenPickingTypeId: number, barcoO
   return firstId(res)
 }
 
+/** The lines of a move, one per package: the tracking number goes in `lot_name`, and Odoo makes the lot when it validates. */
+async function createMoveLines(
+  moveId: number,
+  pickingId: number,
+  courierProductId: number,
+  trackingNumbers: string[],
+): Promise<void> {
+  await odooCall<number[]>('stock.move.line', 'create', {
+    vals_list: trackingNumbers.map((lot_name) => ({
+      move_id: moveId,
+      picking_id: pickingId,
+      product_id: courierProductId,
+      lot_name,
+      quantity: 1,
+      picked: true,
+    })),
+  })
+}
+
 export async function addCourierMoveWithLines(
   pickingId: number,
   courierProductId: number,
@@ -93,24 +112,81 @@ export async function addCourierMoveWithLines(
   })
   const moveId = firstId(res)
 
-  await odooCall<number[]>('stock.move.line', 'create', {
-    vals_list: trackingNumbers.map((lot_name) => ({
-      move_id: moveId,
-      picking_id: pickingId,
-      product_id: courierProductId,
-      lot_name,
-      quantity: 1,
-      picked: true,
-    })),
-  })
+  await createMoveLines(moveId, pickingId, courierProductId, trackingNumbers)
 
   return moveId
 }
 
+/** A line of a move as `search_read` returns it, for the ones that are already there. */
+interface LineaDeMovimientoRead {
+  lot_name: string | false
+  lot_id: Many2one
+}
+
+/**
+ * `addCourierMoveWithLines` for a picking that an earlier attempt may already have worked on. It looks at what
+ * the picking has for the courier before making anything, so a retry never leaves a second move, nor a move
+ * without its lines. A call that fails with a timeout or a 5xx fails the same way whether Odoo did the work or
+ * not, so an attempt cut after the move, or after the lines, has to be picked up where it stopped:
+ *
+ * - no move of the courier on the picking: the whole of `addCourierMoveWithLines`;
+ * - the move is there: only the lines it lacks are made (none, when it has them all).
+ *
+ * The move is told by the courier's product: the webapp makes one move per courier on each picking. A picking
+ * with more than one is something nobody can fix from here, and is an error instead of a guess.
+ *
+ * It costs two reads that a first attempt does not need, so the worker only uses it when the picking is not new.
+ */
+export async function resumeCourierMoveWithLines(
+  pickingId: number,
+  courierProductId: number,
+  trackingNumbers: string[],
+  locationId: number,
+  locationDestId: number,
+): Promise<number> {
+  const moves = await odooCall<Array<{ id: number }>>('stock.move', 'search_read', {
+    domain: [
+      ['picking_id', '=', pickingId],
+      ['product_id', '=', courierProductId],
+      ['state', '!=', 'cancel'],
+    ],
+    fields: ['id'],
+  })
+  if (moves.length === 0) {
+    return addCourierMoveWithLines(pickingId, courierProductId, trackingNumbers, locationId, locationDestId)
+  }
+  if (moves.length > 1) {
+    throw new RespuestaOdooInesperadaError(
+      `El albarán tiene ${moves.length} movimientos del mismo courier. Revisalo en Odoo antes de reintentar.`,
+    )
+  }
+  const moveId = moves[0].id
+
+  const lines = await odooCall<LineaDeMovimientoRead[]>('stock.move.line', 'search_read', {
+    domain: [['move_id', '=', moveId]],
+    fields: ['lot_name', 'lot_id'],
+  })
+  // A line names its package in `lot_name` until the picking is validated, and by its lot after that.
+  const alreadyThere = new Set(lines.map((line) => line.lot_name || (line.lot_id ? line.lot_id[1] : '')))
+  const missing = trackingNumbers.filter((trackingNumber) => !alreadyThere.has(trackingNumber))
+  if (missing.length > 0) await createMoveLines(moveId, pickingId, courierProductId, missing)
+
+  return moveId
+}
+
+/**
+ * Confirms, reserves and validates the picking. Odoo answers `true` when the picking is done. Anything else is
+ * a wizard it wants answered (a backorder it asks about, say) or a refusal, and nobody is there to answer it:
+ * the picking is not done, so that is an error and not a synced recepción.
+ */
 export async function validatePicking(pickingId: number): Promise<void> {
   await odooCall('stock.picking', 'action_confirm', { ids: [pickingId] })
   await odooCall('stock.picking', 'action_assign', { ids: [pickingId] })
-  await odooCall('stock.picking', 'button_validate', { ids: [pickingId] })
+  const res = await odooCall<true | { res_model?: string } | false | null>('stock.picking', 'button_validate', { ids: [pickingId] })
+  if (res !== true) {
+    const wizard = typeof res === 'object' && res !== null ? res.res_model : undefined
+    throw new RespuestaOdooInesperadaError(wizard ? `Odoo pidió confirmar (${wizard})` : 'Odoo no validó el albarán.')
+  }
 }
 
 /**

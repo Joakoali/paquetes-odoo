@@ -8,12 +8,15 @@ import {
   checkDuplicateTrackingNumbers,
   createIncomingPicking,
   addCourierMoveWithLines,
+  resumeCourierMoveWithLines,
   validatePicking,
 } from '../odoo/pickings'
 import { odooCall } from '../odoo/client'
 import { recordSyncedTrackings } from '../cache/trackingActivos'
 import { registrarAuditoria } from '../audit'
-import { ConfiguracionError } from '../errores'
+import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
+
+const ALBARAN_CANCELADO = 'El albarán se canceló en Odoo.'
 
 const TODOS_DUPLICADOS =
   'Todos los tracking numbers eran duplicados — no se creó ningún movimiento'
@@ -67,8 +70,12 @@ async function finishSync(
 /**
  * THE single place recepción data is pushed to Odoo. Called by the QStash
  * single-consumer worker, one session at a time. Idempotent: safe to retry
- * after a partial failure — an already-created picking is reused and any
- * courier batch that already has an odoo_move_id is skipped. It only acts
+ * after a partial failure — an already-created picking is reused, any
+ * courier batch that already has an odoo_move_id is skipped, and on a picking
+ * from an earlier attempt a courier's move is looked up in Odoo before one is
+ * made, so a retry never leaves a second move or a move without its lines.
+ * A picking that Odoo has cancelled, or that it did not validate, is an error
+ * and not a synced recepción. It only acts
  * on a recepción that is `confirmada_pendiente_sync`; for any other it
  * returns without calling Odoo or changing anything.
  */
@@ -160,6 +167,8 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     return
   }
 
+  // A picking that an earlier attempt made may already have moves of ours, with or without their lines.
+  const pickingDeUnIntentoAnterior = Boolean(sesion.odooPickingId)
   let pickingId = sesion.odooPickingId
   if (!pickingId) {
     pickingId = await createIncomingPicking(almacen.odooInTypeId, sesion.barcoOdooId)
@@ -175,13 +184,17 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   // a raw ORM create() — only the UI's onchange fills them. Read the picking's own
   // locations once and pass them explicitly to every move created below. The same
   // read brings the picking's name (MB92/IN/00231), kept on the session right away
-  // so that even a sync that fails later can say which picking it left behind.
+  // so that even a sync that fails later can say which picking it left behind. Its state comes in the same read:
+  // a picking somebody cancelled takes nothing, and finding out after the moves are made would leave them in
+  // it, and the cache believing the packages are in Odoo.
   const [picking] = await odooCall<Array<{
     name: string
+    state: string
     location_id: [number, string]
     location_dest_id: [number, string]
-  }>>('stock.picking', 'read', { ids: [pickingId], fields: ['location_id', 'location_dest_id', 'name'] })
+  }>>('stock.picking', 'read', { ids: [pickingId], fields: ['location_id', 'location_dest_id', 'name', 'state'] })
   if (!picking) throw new Error(`picking ${pickingId} no existe en Odoo`)
+  if (picking.state === 'cancel') throw new RespuestaOdooInesperadaError(ALBARAN_CANCELADO)
   const locationId = picking.location_id[0]
   const locationDestId = picking.location_dest_id[0]
   const pickingRef = picking.name
@@ -189,12 +202,13 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     .set({ odooPickingRef: pickingRef })
     .where(eq(sesionesEscaneo.id, sesionId))
 
+  const ponerMovimiento = pickingDeUnIntentoAnterior ? resumeCourierMoveWithLines : addCourierMoveWithLines
   for (const { batch, productId } of batchesToSend) {
     const trackingNumbers = trackingByBatch.get(batch.id) ?? []
     const toSync = trackingNumbers.filter((t) => !liveDuplicates.has(t))
 
     if (toSync.length > 0) {
-      const moveId = await addCourierMoveWithLines(
+      const moveId = await ponerMovimiento(
         pickingId, productId, toSync, locationId, locationDestId,
       )
       await db.update(sesionCourierBatches)
@@ -221,13 +235,14 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
   // fail every retry forever. Close the session instead and leave a note so
   // /pendientes surfaces it for a human.
   if (anyMove) {
-    // On a retry the picking may already have been validated (or cancelled) by
-    // a previous run — re-validating a terminal picking would error, so skip it.
+    // On a retry the picking may already have been validated by a previous run — re-validating a done
+    // picking would error, so skip it. One that got cancelled meanwhile is not done: an error, not a skip.
     const [cur] = await odooCall<Array<{ state: string }>>(
       'stock.picking', 'read', { ids: [pickingId], fields: ['state'] },
     )
     if (!cur) throw new Error(`picking ${pickingId} no existe en Odoo`)
-    if (cur.state !== 'done' && cur.state !== 'cancel') {
+    if (cur.state === 'cancel') throw new RespuestaOdooInesperadaError(ALBARAN_CANCELADO)
+    if (cur.state !== 'done') {
       await validatePicking(pickingId)
     }
   }

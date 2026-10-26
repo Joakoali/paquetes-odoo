@@ -4,7 +4,7 @@ vi.mock('./client', () => ({ odooCall: vi.fn() }))
 import { odooCall } from './client'
 import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
 import {
-  checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, validatePicking,
+  checkDuplicateTrackingNumbers, createIncomingPicking, addCourierMoveWithLines, resumeCourierMoveWithLines, validatePicking,
   getBarcosConEntregaPendiente, getLineasEntregaPendiente, validarEntrega,
 } from './pickings'
 
@@ -139,6 +139,88 @@ describe('addCourierMoveWithLines', () => {
   })
 })
 
+describe('resumeCourierMoveWithLines', () => {
+  /** What the picking has for the courier: the moves it answers to, then the lines of the move. */
+  function odooTiene(moves: Array<{ id: number }>, lines: Array<{ lot_name: string | false; lot_id: [number, string] | false }> = []) {
+    vi.mocked(odooCall).mockImplementation(async (modelo, metodo) => {
+      if (modelo === 'stock.move' && metodo === 'search_read') return moves as never
+      if (modelo === 'stock.move.line' && metodo === 'search_read') return lines as never
+      if (modelo === 'stock.move' && metodo === 'create') return [900] as never
+      return [1, 2] as never
+    })
+  }
+  const llamadas = (modelo: string, metodo: string) =>
+    vi.mocked(odooCall).mock.calls.filter(([m, me]) => m === modelo && me === metodo).map(([, , params]) => params)
+
+  it('asks for the moves of the courier on the picking that are not cancelled, and makes the whole move when there is none', async () => {
+    odooTiene([])
+
+    const moveId = await resumeCourierMoveWithLines(501, 15, ['T1', 'T2'], 1, 5)
+
+    expect(moveId).toBe(900)
+    expect(llamadas('stock.move', 'search_read')).toEqual([{
+      domain: [['picking_id', '=', 501], ['product_id', '=', 15], ['state', '!=', 'cancel']],
+      fields: ['id'],
+    }])
+    expect(llamadas('stock.move', 'create')).toHaveLength(1)
+    expect(llamadas('stock.move.line', 'create')).toEqual([{
+      vals_list: [
+        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true },
+        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true },
+      ],
+    }])
+  })
+
+  it('makes no second move when the courier has one without lines, and gives it all its lines', async () => {
+    odooTiene([{ id: 880 }], [])
+
+    const moveId = await resumeCourierMoveWithLines(501, 15, ['T1', 'T2'], 1, 5)
+
+    expect(moveId).toBe(880)
+    expect(llamadas('stock.move', 'create')).toEqual([])
+    expect(llamadas('stock.move.line', 'search_read')).toEqual([{ domain: [['move_id', '=', 880]], fields: ['lot_name', 'lot_id'] }])
+    expect(llamadas('stock.move.line', 'create')).toEqual([{
+      vals_list: [
+        { move_id: 880, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true },
+        { move_id: 880, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true },
+      ],
+    }])
+  })
+
+  it('makes only the lines the move lacks', async () => {
+    odooTiene([{ id: 880 }], [{ lot_name: 'T1', lot_id: false }])
+
+    expect(await resumeCourierMoveWithLines(501, 15, ['T1', 'T2', 'T3'], 1, 5)).toBe(880)
+
+    expect(llamadas('stock.move.line', 'create')).toEqual([{
+      vals_list: [
+        { move_id: 880, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true },
+        { move_id: 880, picking_id: 501, product_id: 15, lot_name: 'T3', quantity: 1, picked: true },
+      ],
+    }])
+  })
+
+  it('makes nothing when the move has all its lines, whether they name the package by lot_name or by lot', async () => {
+    odooTiene([{ id: 880 }], [{ lot_name: 'T1', lot_id: false }, { lot_name: false, lot_id: [7, 'T2'] }])
+
+    expect(await resumeCourierMoveWithLines(501, 15, ['T1', 'T2'], 1, 5)).toBe(880)
+
+    expect(llamadas('stock.move', 'create')).toEqual([])
+    expect(llamadas('stock.move.line', 'create')).toEqual([])
+  })
+
+  it('throws, and makes nothing, when the picking has more than one move of the courier', async () => {
+    odooTiene([{ id: 880 }, { id: 881 }])
+
+    const err = await resumeCourierMoveWithLines(501, 15, ['T1'], 1, 5).catch((e) => e)
+
+    expect(err).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(err.message).toBe('El albarán tiene 2 movimientos del mismo courier. Revisalo en Odoo antes de reintentar.')
+    expect(llamadas('stock.move', 'create')).toEqual([])
+    expect(llamadas('stock.move.line', 'create')).toEqual([])
+  })
+})
+
 describe('validatePicking', () => {
   it('runs confirm, assign, and validate in sequence', async () => {
     vi.mocked(odooCall).mockResolvedValue(true)
@@ -148,6 +230,30 @@ describe('validatePicking', () => {
     expect(odooCall).toHaveBeenNthCalledWith(1, 'stock.picking', 'action_confirm', { ids: [501] })
     expect(odooCall).toHaveBeenNthCalledWith(2, 'stock.picking', 'action_assign', { ids: [501] })
     expect(odooCall).toHaveBeenNthCalledWith(3, 'stock.picking', 'button_validate', { ids: [501] })
+  })
+
+  it('throws a RespuestaOdooInesperadaError that names the wizard when Odoo asks to confirm something instead of validating', async () => {
+    vi.mocked(odooCall)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce({ res_model: 'stock.backorder.confirmation' })
+
+    const err = await validatePicking(501).catch((e) => e)
+
+    expect(err).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(err.message).toBe('Odoo pidió confirmar (stock.backorder.confirmation)')
+  })
+
+  it.each([[false], [null], [undefined]])('throws when Odoo answers %s and not true', async (respuesta) => {
+    vi.mocked(odooCall)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(respuesta)
+
+    const err = await validatePicking(501).catch((e) => e)
+
+    expect(err).toBeInstanceOf(RespuestaOdooInesperadaError)
+    expect(err.message).toBe('Odoo no validó el albarán.')
   })
 })
 
