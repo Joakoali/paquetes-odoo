@@ -1,16 +1,20 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../../db/client'
-import { operarios, sesionesEscaneo } from '../../db/schema'
+import { almacenes, operarios, sesionesEscaneo } from '../../db/schema'
 import { registrarAuditoria } from '../audit'
 import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
 import { odooCall } from '../odoo/client'
-import { validarEntrega } from '../odoo/pickings'
+import { campoBarco, validarEntrega } from '../odoo/pickings'
 
-/** What the worker needs to know of a delivery to decide what is left to do on it. */
+/** What the worker needs to know of a delivery to decide what is left to do on it, and whose it is. */
 interface PickingLeido {
   state: string
   move_line_ids: number[]
   is_signed: boolean
+  /** `[id, name]` of its operation type, or `false` when it has none. */
+  picking_type_id: [number, string] | false
+  /** Its barco is under the key that `ODOO_FIELD_BARCO` names, as `[id, name]` or `false`, hence the index signature. */
+  [campo: string]: unknown
 }
 
 /** The note left in the chatter of a delivery: who received, who handed over, how many, and how many stayed. */
@@ -29,7 +33,11 @@ function notaDeEntrega(entrada: {
  * at a time. For each delivery involved it validates only the packages the crew was given (the rest stay in
  * a native backorder, "en depósito"), then signs it and writes the name of who received it.
  *
- * It reads every delivery involved first, and only then touches any. A package the crew was given that is on none
+ * It reads every delivery involved first, and only then touches any. Each must be a delivery of the almacén of the
+ * entrega (its operation type is the almacén's delivery type) and be of the barco of the entrega: the action that
+ * confirmed the entrega took its pickings from a read of Odoo filtered the same way, and this is a second check,
+ * made here because this is the only place that writes, so that a picking that is not the entrega's is never
+ * validated, signed or noted. A package the crew was given that is on none
  * of them any more (it went to a backorder with another entrega, or somebody reserved the delivery again) can not
  * be handed over by this entrega: reporting it as synced would leave it in depósito, unsigned and with nobody told.
  * That is a failure for Pendientes, raised before anything is written.
@@ -54,6 +62,12 @@ export async function syncEntregaSession(sesionId: string): Promise<void> {
   // leaves no picking validated without its name.
   const recibidoPorField = process.env.ODOO_FIELD_RECIBIDO_POR
   if (!recibidoPorField) throw new ConfiguracionError('ODOO_FIELD_RECIBIDO_POR no está configurado')
+  // The same for what tells whose delivery a picking is: the field of its barco, and the delivery type of the almacén.
+  const barcoField = campoBarco()
+  const almacen = await db.query.almacenes.findFirst({ where: eq(almacenes.id, sesion.almacenId) })
+  if (!almacen?.odooOutTypeId) {
+    throw new ConfiguracionError('El almacén no tiene tipo de entrega. Refrescá los datos de Odoo.')
+  }
 
   const { odooPickingIds, odooMoveLineIds, firmaData, receptorNombre } = sesion
   if (!odooPickingIds || !odooMoveLineIds || !firmaData || !receptorNombre) {
@@ -70,9 +84,17 @@ export async function syncEntregaSession(sesionId: string): Promise<void> {
   for (const pickingId of new Set(odooPickingIds)) {
     const [picking] = await odooCall<PickingLeido[]>('stock.picking', 'read', {
       ids: [pickingId],
-      fields: ['state', 'move_line_ids', 'is_signed'],
+      fields: ['state', 'move_line_ids', 'is_signed', 'picking_type_id', barcoField],
     })
     if (!picking) throw new Error(`picking ${pickingId} no existe en Odoo`)
+    // Nothing has been written yet, so a picking that is not this entrega's stops it before anything is.
+    if (!picking.picking_type_id || picking.picking_type_id[0] !== almacen.odooOutTypeId) {
+      throw new RespuestaOdooInesperadaError(`El albarán ${pickingId} no es una entrega de este almacén. No se escribió nada en Odoo.`)
+    }
+    const barco = picking[barcoField] as [number, string] | false | undefined
+    if (!barco || barco[0] !== sesion.barcoOdooId) {
+      throw new RespuestaOdooInesperadaError(`El albarán ${pickingId} es de otro barco. No se escribió nada en Odoo.`)
+    }
     lecturas.push({ pickingId, picking })
   }
 

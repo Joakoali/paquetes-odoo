@@ -49,7 +49,7 @@ export async function checkDuplicateTrackingNumbers(trackingNumbers: string[]): 
  * The name of the picking field that holds the barco. It is a custom field, so its name comes from
  * the environment and is never written in the code.
  */
-function campoBarco(): string {
+export function campoBarco(): string {
   const campo = process.env.ODOO_FIELD_BARCO
   if (!campo) throw new ConfiguracionError('ODOO_FIELD_BARCO no está configurado')
   return campo

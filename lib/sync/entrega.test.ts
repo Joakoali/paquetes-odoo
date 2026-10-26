@@ -2,8 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
 // Nothing here reaches Odoo. `validarEntrega` has its own module and its own tests; `odooCall` is what the
-// worker uses to read each picking, to write the signature and the crew name, and to leave the note.
-vi.mock('@/lib/odoo/pickings', () => ({ validarEntrega: vi.fn() }))
+// worker uses to read each picking, to write the signature and the crew name, and to leave the note. The rest of
+// the module stays as it is (the name of the field of the barco comes from it).
+vi.mock('@/lib/odoo/pickings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/odoo/pickings')>()),
+  validarEntrega: vi.fn(),
+}))
 vi.mock('@/lib/odoo/client', () => ({ odooCall: vi.fn() }))
 
 import { eq } from 'drizzle-orm'
@@ -17,6 +21,10 @@ import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import { syncEntregaSession } from './entrega'
 
 const RECIBIDO_POR = 'x_studio_recibido_por_2'
+const BARCO = 'x_studio_barco'
+/** The delivery type of the almacén (MB92 delivers with operation type 2) and the barco of the entregas of the tests. */
+const TIPO_DE_ENTREGA = 2
+const BARCO_ODOO_ID = 673
 /** The signature as registrarEntrega stores it: bare base64, no `data:` prefix. */
 const FIRMA = 'iVBORw0KGgo='
 
@@ -24,6 +32,9 @@ interface PickingEnOdoo {
   state: string
   move_line_ids: number[]
   is_signed: boolean
+  picking_type_id: [number, string] | false
+  /** The barco, under the name that ODOO_FIELD_BARCO gives it. */
+  x_studio_barco: [number, string] | false
 }
 
 let veronika: Operario
@@ -33,9 +44,19 @@ let odoo: Map<number, PickingEnOdoo>
 /** An error the next write to a picking throws (once), to cut a run in the middle. */
 let falloAlEscribir: Error | null
 
-/** A picking as Odoo has it before the delivery: assigned, unsigned, with lines 1 and 2 unless said. */
+/**
+ * A picking as Odoo has it before the delivery: assigned, unsigned, with lines 1 and 2, of the delivery type of
+ * MB92 and of the barco 673, unless said.
+ */
 function odooTiene(id: number, datos: Partial<PickingEnOdoo> = {}) {
-  odoo.set(id, { state: 'assigned', move_line_ids: [1, 2], is_signed: false, ...datos })
+  odoo.set(id, {
+    state: 'assigned',
+    move_line_ids: [1, 2],
+    is_signed: false,
+    picking_type_id: [TIPO_DE_ENTREGA, 'MB92: Entregas'],
+    x_studio_barco: [BARCO_ODOO_ID, 'MAYANQUEEN'],
+    ...datos,
+  })
 }
 
 /**
@@ -68,6 +89,7 @@ beforeEach(async () => {
   odoo = new Map()
   falloAlEscribir = null
   vi.stubEnv('ODOO_FIELD_RECIBIDO_POR', RECIBIDO_POR)
+  vi.stubEnv('ODOO_FIELD_BARCO', BARCO)
 
   veronika = await seedOperario(db, { nombre: 'Veronika' })
   mb92 = await seedAlmacen(db)
@@ -151,8 +173,8 @@ describe('syncEntregaSession', () => {
 
     // Two pickings, two reads, though both were validated, signed and noted afterwards: the loop reuses them.
     expect(llamadasAOdoo('stock.picking', 'read')).toEqual([
-      { ids: [700], fields: ['state', 'move_line_ids', 'is_signed'] },
-      { ids: [701], fields: ['state', 'move_line_ids', 'is_signed'] },
+      { ids: [700], fields: ['state', 'move_line_ids', 'is_signed', 'picking_type_id', BARCO] },
+      { ids: [701], fields: ['state', 'move_line_ids', 'is_signed', 'picking_type_id', BARCO] },
     ])
     expect(vi.mocked(validarEntrega)).toHaveBeenCalledTimes(2)
     expect(Math.max(...ordenesDeOdoo('read'))).toBeLessThan(vi.mocked(validarEntrega).mock.invocationCallOrder[0])
@@ -337,7 +359,7 @@ describe('syncEntregaSession', () => {
 
     /** The only things asked of Odoo: the read of each picking. Nothing was validated, signed or noted. */
     const lecturas = (...pickingIds: number[]) =>
-      pickingIds.map((id) => ['stock.picking', 'read', { ids: [id], fields: ['state', 'move_line_ids', 'is_signed'] }])
+      pickingIds.map((id) => ['stock.picking', 'read', { ids: [id], fields: ['state', 'move_line_ids', 'is_signed', 'picking_type_id', BARCO] }])
 
     it('throws, and writes nothing in Odoo, when one chosen line is on none of the pickings', async () => {
       odooTiene(700, { move_line_ids: [1, 2] }) // line 3 is not on it any more
@@ -453,6 +475,132 @@ describe('syncEntregaSession', () => {
     })
   })
 
+  // Defense in depth for who may deliver what: the action that confirms an entrega already takes its pickings from a
+  // read of Odoo filtered by the almacén and the barco, but this is the only place that writes, and it has the
+  // pickings in hand. Every picking must be a delivery of the almacén (its operation type) and be of the barco of
+  // the entrega, or nothing is written: a forged request must not be able to sign another barco's delivery.
+  describe('a picking that is not the delivery of this almacén and barco', () => {
+    /** Nothing was written in Odoo, and the entrega is still waiting: registrarFalloSync is the one that moves it to error. */
+    async function nadaSeEscribio(sesionId: string) {
+      expect(validarEntrega).not.toHaveBeenCalled()
+      expect(llamadasAOdoo('stock.picking', 'write')).toEqual([])
+      expect(llamadasAOdoo('stock.picking', 'message_post')).toEqual([])
+      expect(llamadasAOdoo('stock.move.line', 'write')).toEqual([])
+      expect(await filaSesion(sesionId)).toMatchObject({ estado: 'confirmada_pendiente_sync', syncedAt: null })
+      expect(await db.select().from(auditLog)).toEqual([])
+    }
+
+    it('throws, and writes nothing, for a picking of another operation type: the reception of the almacén, say', async () => {
+      odooTiene(700, { picking_type_id: [1, 'MB92: Recepciones'] })
+      const sesion = await crearEntrega()
+
+      const error = await syncEntregaSession(sesion.id).catch((e) => e)
+
+      expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+      expect(error.message).toBe('El albarán 700 no es una entrega de este almacén. No se escribió nada en Odoo.')
+      expect(clasificarError(error)).toBe('odoo') // nothing a retry fixes
+      await nadaSeEscribio(sesion.id)
+    })
+
+    it('throws, and writes nothing, for a picking of the delivery type of another almacén', async () => {
+      odooTiene(700, { picking_type_id: [22, 'TGN: Entregas'] })
+      const sesion = await crearEntrega()
+
+      await expect(syncEntregaSession(sesion.id)).rejects.toThrow('El albarán 700 no es una entrega de este almacén.')
+
+      await nadaSeEscribio(sesion.id)
+    })
+
+    it('throws, and writes nothing, for a picking of another barco', async () => {
+      odooTiene(700, { x_studio_barco: [674, 'MAYANQUEENIV'] })
+      const sesion = await crearEntrega()
+
+      const error = await syncEntregaSession(sesion.id).catch((e) => e)
+
+      expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
+      expect(error.message).toBe('El albarán 700 es de otro barco. No se escribió nada en Odoo.')
+      expect(clasificarError(error)).toBe('odoo')
+      await nadaSeEscribio(sesion.id)
+    })
+
+    it.each([
+      ['without operation type', { picking_type_id: false as const }, 'no es una entrega de este almacén'],
+      ['without barco', { x_studio_barco: false as const }, 'es de otro barco'],
+    ])('throws, and writes nothing, for a picking %s', async (_caso, datos, mensaje) => {
+      odooTiene(700, datos)
+      const sesion = await crearEntrega()
+
+      await expect(syncEntregaSession(sesion.id)).rejects.toThrow(mensaje)
+
+      await nadaSeEscribio(sesion.id)
+    })
+
+    it('writes nothing in any picking when only the second one is not the delivery: the first is not signed either', async () => {
+      odooTiene(700)
+      odooTiene(701, { move_line_ids: [3], x_studio_barco: [999, 'OTRO'] })
+      const sesion = await crearEntrega({ odooPickingIds: [700, 701], odooMoveLineIds: [1, 2, 3] })
+
+      await expect(syncEntregaSession(sesion.id)).rejects.toThrow('El albarán 701 es de otro barco.')
+
+      await nadaSeEscribio(sesion.id)
+      expect(odoo.get(700)).toMatchObject({ state: 'assigned', is_signed: false })
+    })
+
+    it('checks the type before the barco, and says only the first thing that is wrong', async () => {
+      odooTiene(700, { picking_type_id: [1, 'MB92: Recepciones'], x_studio_barco: [999, 'OTRO'] })
+      const sesion = await crearEntrega()
+
+      await expect(syncEntregaSession(sesion.id)).rejects.toThrow('no es una entrega de este almacén')
+    })
+
+    it('lets a retry through when its picking is already done and signed: it is still the delivery of the barco', async () => {
+      odooTiene(700, { state: 'done', is_signed: true })
+      const sesion = await crearEntrega()
+
+      await syncEntregaSession(sesion.id)
+
+      expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
+    })
+
+    it('goes by the delivery type of the almacén of the entrega, not of another one', async () => {
+      const tgn = await seedAlmacen(db, { prefijo: 'TGN', nombre: 'Port Tarraco (TGN)', odooWarehouseId: 5, odooInTypeId: 21, odooOutTypeId: 22 })
+      odooTiene(700, { picking_type_id: [22, 'TGN: Entregas'] })
+      const sesion = await crearEntrega({ almacenId: tgn.id })
+
+      await syncEntregaSession(sesion.id)
+
+      expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
+    })
+  })
+
+  describe('what an admin has to fix to tell whose delivery a picking is', () => {
+    it('throws ConfiguracionError, without touching Odoo, when ODOO_FIELD_BARCO is not set', async () => {
+      vi.stubEnv('ODOO_FIELD_BARCO', undefined)
+      odooTiene(700)
+      const sesion = await crearEntrega()
+
+      const error = await syncEntregaSession(sesion.id).catch((e) => e)
+
+      expect(error).toBeInstanceOf(ConfiguracionError)
+      expect(error.message).toBe('ODOO_FIELD_BARCO no está configurado')
+      expect(odooCall).not.toHaveBeenCalled()
+      expect(validarEntrega).not.toHaveBeenCalled()
+    })
+
+    it('throws ConfiguracionError, without touching Odoo, when the almacén has no delivery type', async () => {
+      const sinTipo = await seedAlmacen(db, { prefijo: 'IBZ', nombre: 'Ibiza (IBZ)', odooWarehouseId: 7, odooInTypeId: 31, odooOutTypeId: null })
+      odooTiene(700)
+      const sesion = await crearEntrega({ almacenId: sinTipo.id })
+
+      const error = await syncEntregaSession(sesion.id).catch((e) => e)
+
+      expect(error).toBeInstanceOf(ConfiguracionError)
+      expect(error.message).toBe('El almacén no tiene tipo de entrega. Refrescá los datos de Odoo.')
+      expect(odooCall).not.toHaveBeenCalled()
+      expect(validarEntrega).not.toHaveBeenCalled()
+    })
+  })
+
   describe('a message that arrives when the entrega is not waiting for its sync', () => {
     // 'sincronizada': QStash delivered a message whose run already finished. 'en_curso': never the case for an
     // entrega, but nothing but a waiting one is the worker's. 'error': it failed for good, and Pendientes puts it
@@ -467,12 +615,13 @@ describe('syncEntregaSession', () => {
       expect(odooCall).not.toHaveBeenCalled()
       expect(validarEntrega).not.toHaveBeenCalled()
       expect(await filaSesion(sesion.id)).toEqual(antes)
-      expect(odoo.get(700)).toEqual({ state: 'assigned', move_line_ids: [1, 2], is_signed: false })
+      expect(odoo.get(700)).toMatchObject({ state: 'assigned', move_line_ids: [1, 2], is_signed: false })
       expect(await db.select().from(auditLog)).toEqual([])
     })
 
     it('does not complain about the configuration either: failing would send a finished entrega to error', async () => {
       vi.stubEnv('ODOO_FIELD_RECIBIDO_POR', undefined)
+      vi.stubEnv('ODOO_FIELD_BARCO', undefined)
       const sesion = await crearEntrega({ estado: 'sincronizada' })
 
       await expect(syncEntregaSession(sesion.id)).resolves.toBeUndefined()
