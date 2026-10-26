@@ -14,14 +14,14 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { notFound, redirect } from 'next/navigation'
 import { db } from '@/db/client'
-import type { Almacen, Operario } from '@/db/schema'
+import { sesionesEscaneo, type Almacen, type Operario } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { UnauthorizedError } from '@/lib/auth/guards'
 import { ConfiguracionError, ErrorParaOperario, OdooError } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { contarSinEnviarPorBarco } from '@/lib/recepcion/recepciones'
-import { seedBarco } from '@/lib/testing/seed'
+import { seedAlmacen, seedBarco, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import { LECTURA_DE_ODOO_FALLIDA } from '@/lib/ui/lectura-fallida'
 import EntregaBarcoPage from './page'
@@ -35,9 +35,33 @@ const linea = (moveLineId: number, datos: Partial<LineaEntrega> = {}): LineaEntr
 })
 const lineas = [linea(11), linea(12), linea(13, { trackingNumber: null, courierNombre: 'UPS (incorrecto)' })]
 
+/** An entrega of the almacén for the barco, written straight to the database so that it can be in any estado, almacén or barco. */
+async function entregaCon(
+  operarioId: string,
+  lineasIds: number[],
+  estado: typeof sesionesEscaneo.$inferInsert['estado'],
+  datos: Partial<typeof sesionesEscaneo.$inferInsert> = {},
+) {
+  await db.insert(sesionesEscaneo).values({
+    operarioId,
+    almacenId: almacen.id,
+    barcoOdooId: 673,
+    tipo: 'entrega',
+    estado,
+    odooPickingIds: [700],
+    odooMoveLineIds: lineasIds,
+    receptorNombre: 'Capitán Pérez',
+    firmaData: 'AAA',
+    confirmedAt: new Date(),
+    ...datos,
+  })
+}
+
 beforeEach(async () => {
   vi.resetAllMocks()
   await resetTestDb(db as unknown as TestDb)
+  // The almacén the operario works in is in the database too: the entregas that hold lines belong to it.
+  await seedAlmacen(db, { id: almacen.id })
   await seedBarco(db, { odooId: 673, nombre: 'MAYANQUEEN' })
   vi.mocked(requireOperarioFromCookies).mockResolvedValue(operario)
   vi.mocked(requireAlmacenActivo).mockResolvedValue(almacen)
@@ -125,7 +149,53 @@ describe('EntregaBarcoPage', () => {
     const flujo = buscar(await pagina(), EntregaFlow)
 
     expect(flujo?.props).toEqual({
-      barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', almacenPrefijo: 'MB92', lineas, sinEnviar: 3,
+      barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', almacenPrefijo: 'MB92', lineas, sinEnviar: 3, enviandose: 0,
+    })
+  })
+
+  describe('packages that an entrega on its way to Odoo already holds', () => {
+    it('leaves them out of what is offered, and says how many there are: a second entrega of them must not be one tap away', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      // Confirmed a moment ago: the worker has not got to it, so Odoo still lists its packages as pending.
+      await entregaCon(veronikaId, [11, 12], 'confirmada_pendiente_sync')
+
+      const flujo = buscar(await pagina(), EntregaFlow)
+
+      expect(flujo?.props.lineas).toEqual([linea(13, { trackingNumber: null, courierNombre: 'UPS (incorrecto)' })])
+      expect(flujo?.props.enviandose).toBe(2)
+    })
+
+    it('still draws the flow when every package is held, with nothing to offer and all of them on their way', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      await entregaCon(veronikaId, [11, 12, 13], 'confirmada_pendiente_sync')
+
+      const flujo = buscar(await pagina(), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ lineas: [], enviandose: 3 })
+    })
+
+    it('offers them again once the entrega is not waiting for its sync: it is in Odoo, or it failed and nothing was delivered', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      await entregaCon(veronikaId, [11], 'sincronizada')
+      await entregaCon(veronikaId, [12], 'error')
+
+      const flujo = buscar(await pagina(), EntregaFlow)
+
+      expect(flujo?.props.lineas).toEqual(lineas)
+      expect(flujo?.props.enviandose).toBe(0)
+    })
+
+    it('holds only what the entregas of this almacén and this barco hold', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      const tgn = await seedAlmacen(db, { prefijo: 'TGN', nombre: 'Port Tarraco (TGN)', odooWarehouseId: 5, odooInTypeId: 21, odooOutTypeId: 22 })
+      await seedBarco(db, { odooId: 674, nombre: 'MAYANQUEENIV' })
+      await entregaCon(veronikaId, [11], 'confirmada_pendiente_sync', { almacenId: tgn.id })
+      await entregaCon(veronikaId, [12], 'confirmada_pendiente_sync', { barcoOdooId: 674 })
+
+      const flujo = buscar(await pagina(), EntregaFlow)
+
+      expect(flujo?.props.lineas).toEqual(lineas)
+      expect(flujo?.props.enviandose).toBe(0)
     })
   })
 

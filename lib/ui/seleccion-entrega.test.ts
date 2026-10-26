@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { LineaEntrega } from '@/lib/odoo/pickings'
 import {
-  alternarLinea, filtrarBarcos, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEspera, textoDeLinea,
-  textoDeSeleccion, textoDeSiguiente, textoDeSinEnviar,
+  alternarLinea, filtrarBarcos, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEnviandose, textoDeEspera, textoDeLinea,
+  textoDeSeleccion, textoDeSiguiente, textoDeSinEnviar, textoSinPaquetes,
 } from './seleccion-entrega'
 
 const l = (moveLineId: number, pickingId: number, datos: Partial<LineaEntrega> = {}): LineaEntrega => ({
@@ -185,5 +185,25 @@ describe('puedeConfirmar', () => {
 
   it('needs at least one package', () => {
     expect(puedeConfirmar({ receptor: 'Tom', firma, elegidas: 0 })).toBe(false)
+  })
+})
+
+describe('textoDeEnviandose', () => {
+  it('says how many packages of the barco are already in an entrega that is on its way to Odoo', () => {
+    expect(textoDeEnviandose(3)).toBe('3 paquetes ya entregados, enviándose a Odoo')
+  })
+
+  it('agrees with a single package', () => {
+    expect(textoDeEnviandose(1)).toBe('1 paquete ya entregado, enviándose a Odoo')
+  })
+})
+
+describe('textoSinPaquetes', () => {
+  it('says Odoo has nothing waiting when no package is on its way either', () => {
+    expect(textoSinPaquetes(0)).toBe('Odoo no tiene paquetes esperando entrega para este barco.')
+  })
+
+  it('says there are no more to deliver when the ones left out are on their way to Odoo', () => {
+    expect(textoSinPaquetes(2)).toBe('No quedan más paquetes para entregar.')
   })
 })

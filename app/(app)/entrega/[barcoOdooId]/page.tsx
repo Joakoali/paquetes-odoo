@@ -5,6 +5,8 @@ import { db } from '@/db/client'
 import { barcosCache, type Almacen } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
+import { moveLineIdsRetenidas } from '@/lib/entrega/entregas'
+import { separarRetenidas } from '@/lib/entrega/lineas'
 import { ConfiguracionError, ErrorParaOperario } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { contarSinEnviarPorBarco } from '@/lib/recepcion/recepciones'
@@ -22,23 +24,27 @@ function idDeLaDireccion(texto: string): number | null {
 }
 
 /**
- * What Odoo has waiting for the barco in the almacén, and how many of its packages are received and not sent, or what to
- * tell the operario when they could not be read. Only a reading that failed is told: a bug goes on to the error screen
+ * What Odoo has waiting for the barco in the almacén and no entrega on its way to Odoo has taken, how many of its packages
+ * are taken like that, and how many are received and not sent, or what to tell the operario when they could not be read. Only a reading that failed is told: a bug goes on to the error screen
  * of the app.
  */
 async function leerEntrega(
   almacen: Almacen,
   barcoOdooId: number,
-): Promise<{ lineas: LineaEntrega[]; sinEnviar: number } | { mensaje: string }> {
+): Promise<{ lineas: LineaEntrega[]; enviandose: number; sinEnviar: number } | { mensaje: string }> {
   try {
     if (!almacen.odooOutTypeId) {
       throw new ConfiguracionError('El almacén no tiene tipo de entrega. Refrescá los datos de Odoo.')
     }
-    const [lineas, sinEnviar] = await Promise.all([
+    const [pendientes, sinEnviar, retenidas] = await Promise.all([
       getLineasEntregaPendiente({ outTypeId: almacen.odooOutTypeId, barcoOdooId }),
       contarSinEnviarPorBarco(almacen.id),
+      moveLineIdsRetenidas({ almacenId: almacen.id, barcoOdooId }),
     ])
-    return { lineas, sinEnviar: sinEnviar.get(barcoOdooId) ?? 0 }
+    // Odoo goes on listing the packages of an entrega until the worker validates it, about a minute after it was confirmed:
+    // they are not offered again meanwhile, or a second entrega of them would be one tap away.
+    const { disponibles, enviandose } = separarRetenidas(pendientes, retenidas)
+    return { lineas: disponibles, enviandose, sinEnviar: sinEnviar.get(barcoOdooId) ?? 0 }
   } catch (error) {
     const mensaje = mensajeDeLecturaFallida(error)
     if (mensaje === null) throw error
@@ -107,6 +113,7 @@ export default async function EntregaBarcoPage({ params }: { params: Promise<{ b
         almacenPrefijo={almacen.prefijo}
         lineas={lectura.lineas}
         sinEnviar={lectura.sinEnviar}
+        enviandose={lectura.enviandose}
       />
     </main>
   )

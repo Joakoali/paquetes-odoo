@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray } from 'drizzle-orm'
+import { and, asc, eq, gte, inArray, ne } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { barcosCache, sesionesEscaneo, type Almacen, type SesionEscaneo } from '../../db/schema'
 import { registrarAuditoria } from '../audit'
@@ -165,6 +165,34 @@ export async function entregaGuardada(id: string, almacenId: number): Promise<bo
     where: and(eq(sesionesEscaneo.id, id), eq(sesionesEscaneo.tipo, 'entrega'), eq(sesionesEscaneo.almacenId, almacenId)),
   })
   return existente !== undefined
+}
+
+/**
+ * The move lines that an entrega of the almacén for the barco, still waiting for its sync (`confirmada_pendiente_sync`),
+ * has taken. The worker has not got to it yet, so Odoo still lists those lines as pending: they must not be offered
+ * again, nor accepted by a second entrega, or the same packages would be handed over twice.
+ *
+ * Only that estado holds. A synced entrega's lines are no longer pending in Odoo, and one that failed delivered
+ * nothing: its packages go back through Pendientes, and meanwhile they are not stuck.
+ *
+ * `exceptoId` leaves out one entrega: the one being confirmed again. A retry with the same id finds its own lines held,
+ * and they must not block it.
+ */
+export async function moveLineIdsRetenidas(entrada: {
+  almacenId: number
+  barcoOdooId: number
+  exceptoId?: string
+}): Promise<Set<number>> {
+  const filas = await db.select({ lineas: sesionesEscaneo.odooMoveLineIds })
+    .from(sesionesEscaneo)
+    .where(and(
+      eq(sesionesEscaneo.almacenId, entrada.almacenId),
+      eq(sesionesEscaneo.barcoOdooId, entrada.barcoOdooId),
+      eq(sesionesEscaneo.tipo, 'entrega'),
+      eq(sesionesEscaneo.estado, 'confirmada_pendiente_sync'),
+      entrada.exceptoId === undefined ? undefined : ne(sesionesEscaneo.id, entrada.exceptoId),
+    ))
+  return new Set(filas.flatMap((fila) => fila.lineas ?? []))
 }
 
 /** An entrega confirmed today. */

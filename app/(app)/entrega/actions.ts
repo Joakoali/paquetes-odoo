@@ -5,7 +5,7 @@ import type { Almacen } from '@/db/schema'
 import { ejecutarAccion, type ResultadoAccion } from '@/lib/acciones'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
-import { entregaGuardada, registrarEntrega } from '@/lib/entrega/entregas'
+import { entregaGuardada, moveLineIdsRetenidas, registrarEntrega } from '@/lib/entrega/entregas'
 import { resolverElegidas } from '@/lib/entrega/lineas'
 import { ConfiguracionError, ErrorParaOperario } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
@@ -72,6 +72,22 @@ async function leerPendientes(almacen: Almacen, barcoOdooId: number): Promise<Li
 }
 
 /**
+ * The lines of the request that can be delivered, and the deliveries they are on: those that Odoo has waiting for the barco
+ * in the almacén, and that no other entrega on its way to Odoo has taken. The entrega being confirmed is left out of
+ * that second check, so that a retry of it is not blocked by its own lines.
+ */
+async function lineasAceptadas(
+  almacen: Almacen,
+  entrada: { id: string; barcoOdooId: number; moveLineIds: number[] },
+): Promise<{ moveLineIds: number[]; pickingIds: number[] }> {
+  const [pendientes, retenidas] = await Promise.all([
+    leerPendientes(almacen, entrada.barcoOdooId),
+    moveLineIdsRetenidas({ almacenId: almacen.id, barcoOdooId: entrada.barcoOdooId, exceptoId: entrada.id }),
+  ])
+  return resolverElegidas({ pedidas: entrada.moveLineIds, pendientes, retenidas })
+}
+
+/**
  * Registers the entrega the crew confirmed and queues it. `id` is made up by the phone before its first try and is
  * what makes a retry harmless: the domain saves the entrega once per id, whatever the number of tries.
  *
@@ -95,7 +111,7 @@ export async function confirmarEntregaAction(entrada: {
     // A retry finds its entrega saved: nothing of what it sends is used, so nothing of it is given to the domain.
     const lineas = await entregaGuardada(entrada.id, almacen.id)
       ? { moveLineIds: [], pickingIds: [] }
-      : resolverElegidas({ pedidas: entrada.moveLineIds, pendientes: await leerPendientes(almacen, entrada.barcoOdooId) })
+      : await lineasAceptadas(almacen, entrada)
 
     // Field by field: the operario and the almacén are the ones of the session, whatever else the client sent along.
     await registrarEntrega({

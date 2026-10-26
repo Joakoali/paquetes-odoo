@@ -65,6 +65,16 @@ export function textoDeAvisoSinEnviar(cantidad: number): string {
     : `Hay ${cantidad} paquetes de este barco recibidos pero sin enviar a Odoo`
 }
 
+/** The strip of the list of packages of a barco some of whose packages are already in an entrega that is on its way to Odoo. */
+export function textoDeEnviandose(cantidad: number): string {
+  return `${textoDePaquetes(cantidad)} ${cantidad === 1 ? 'ya entregado' : 'ya entregados'}, enviándose a Odoo`
+}
+
+/** What the list of packages says when there is nothing to choose: either Odoo has nothing, or what it has is on its way. */
+export function textoSinPaquetes(enviandose: number): string {
+  return enviandose > 0 ? 'No quedan más paquetes para entregar.' : 'Odoo no tiene paquetes esperando entrega para este barco.'
+}
+
 /**
  * A line of the list: what stands for the package, and the courier apart from it. A line without lot has no package
  * number, so it says "sin número" after its courier, which then is not repeated.

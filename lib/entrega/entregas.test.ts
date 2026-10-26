@@ -17,7 +17,7 @@ import { publishSync } from '@/lib/queue/publish'
 import { abrirRecepcion, escanearPaquete } from '@/lib/recepcion/recepciones'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
-import { entregaGuardada, listarBarcosParaEntregar, listarEntregadasHoy, registrarEntrega } from './entregas'
+import { entregaGuardada, listarBarcosParaEntregar, listarEntregadasHoy, moveLineIdsRetenidas, registrarEntrega } from './entregas'
 
 let veronika: Operario
 let mb92: Almacen
@@ -474,5 +474,95 @@ describe('entregaGuardada', () => {
     }).returning()
 
     expect(await entregaGuardada(recepcion.id, mb92.id)).toBe(false)
+  })
+})
+
+describe('moveLineIdsRetenidas', () => {
+  /** An entrega with these lines, written straight to the database so that it can be in any estado, almacén or barco. */
+  async function entregaCon(
+    lineas: number[] | null,
+    estado: typeof sesionesEscaneo.$inferInsert['estado'],
+    datos: Partial<typeof sesionesEscaneo.$inferInsert> = {},
+  ) {
+    const [sesion] = await db.insert(sesionesEscaneo).values({
+      operarioId: veronika.id,
+      almacenId: mb92.id,
+      barcoOdooId: 673,
+      tipo: 'entrega',
+      estado,
+      odooPickingIds: [700],
+      odooMoveLineIds: lineas,
+      receptorNombre: 'Capitán Pérez',
+      firmaData: 'AAA',
+      confirmedAt: new Date(),
+      ...datos,
+    }).returning()
+    return sesion
+  }
+
+  const retenidas = (datos: Partial<Parameters<typeof moveLineIdsRetenidas>[0]> = {}) =>
+    moveLineIdsRetenidas({ almacenId: mb92.id, barcoOdooId: 673, ...datos })
+
+  it('holds the lines of an entrega that is still waiting for its sync: Odoo still lists them as pending', async () => {
+    await entregaCon([11, 12], 'confirmada_pendiente_sync')
+
+    expect(await retenidas()).toEqual(new Set([11, 12]))
+  })
+
+  it.each(['sincronizada', 'error', 'en_curso'] as const)('does not hold the lines of an entrega that is %s', async (estado) => {
+    // Synced: Odoo no longer lists them. Failed: they were not delivered, and go back through Pendientes. Neither blocks a new entrega.
+    await entregaCon([11, 12], estado)
+
+    expect(await retenidas()).toEqual(new Set())
+  })
+
+  it('holds the lines of every entrega waiting for its sync, each line once', async () => {
+    await entregaCon([11, 12], 'confirmada_pendiente_sync')
+    await entregaCon([12, 13], 'confirmada_pendiente_sync')
+    await entregaCon([14], 'sincronizada')
+
+    expect(await retenidas()).toEqual(new Set([11, 12, 13]))
+  })
+
+  it('holds only what the entregas of that almacén hold', async () => {
+    const tgn = await seedAlmacen(db, { prefijo: 'TGN', nombre: 'Port Tarraco (TGN)', odooWarehouseId: 5, odooInTypeId: 21, odooOutTypeId: 22 })
+    await entregaCon([11], 'confirmada_pendiente_sync')
+    await entregaCon([21], 'confirmada_pendiente_sync', { almacenId: tgn.id })
+
+    expect(await retenidas()).toEqual(new Set([11]))
+    expect(await retenidas({ almacenId: tgn.id })).toEqual(new Set([21]))
+  })
+
+  it('holds only what the entregas of that barco hold', async () => {
+    await entregaCon([11], 'confirmada_pendiente_sync')
+    await entregaCon([31], 'confirmada_pendiente_sync', { barcoOdooId: 674 })
+
+    expect(await retenidas()).toEqual(new Set([11]))
+    expect(await retenidas({ barcoOdooId: 674 })).toEqual(new Set([31]))
+    expect(await retenidas({ barcoOdooId: 999 })).toEqual(new Set())
+  })
+
+  it('does not hold what a recepción holds', async () => {
+    await entregaCon([11], 'confirmada_pendiente_sync', { tipo: 'recepcion' })
+
+    expect(await retenidas()).toEqual(new Set())
+  })
+
+  it('does not hold the lines of the entrega it is asked to leave out: a retry of it must not be blocked by its own lines', async () => {
+    const propia = await entregaCon([11, 12], 'confirmada_pendiente_sync')
+    await entregaCon([13], 'confirmada_pendiente_sync')
+
+    expect(await retenidas({ exceptoId: propia.id })).toEqual(new Set([13]))
+    expect(await retenidas()).toEqual(new Set([11, 12, 13]))
+  })
+
+  it('copes with an entrega that has no lines stored', async () => {
+    await entregaCon(null, 'confirmada_pendiente_sync')
+
+    expect(await retenidas()).toEqual(new Set())
+  })
+
+  it('holds nothing when there is no entrega', async () => {
+    expect(await retenidas()).toEqual(new Set())
   })
 })

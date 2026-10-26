@@ -8,8 +8,8 @@ import { SignaturePad } from '@/components/signature-pad'
 import type { LineaEntrega } from '@/lib/odoo/pickings'
 import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
 import {
-  alternarLinea, MAX_NOMBRE_RECEPTOR, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeLinea,
-  textoDeSeleccion, textoDeSiguiente,
+  alternarLinea, MAX_NOMBRE_RECEPTOR, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEnviandose, textoDeLinea,
+  textoDeSeleccion, textoDeSiguiente, textoSinPaquetes,
 } from '@/lib/ui/seleccion-entrega'
 import { llamarAccion } from '@/lib/ui/textoDeFallo'
 import { confirmarEntregaAction, enviarRecepcionesDelBarcoAction } from '../actions'
@@ -66,13 +66,15 @@ function FilaDeLinea({ linea, elegida, onAlternar }: {
  * entrega it saved the first time, and a name or a signature changed since would look sent when it was not). The button is
  * disabled while a try is on its way: a second touch does not send a second time.
  */
-export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, sinEnviar }: {
+export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, sinEnviar, enviandose }: {
   barcoOdooId: number
   barcoNombre: string
   almacenPrefijo: string
   lineas: LineaEntrega[]
   /** The packages of the barco received and not sent to Odoo yet: they are not in `lineas`. */
   sinEnviar: number
+  /** The packages Odoo still lists that an entrega already confirmed is taking to Odoo: they are not in `lineas`, so they cannot be handed over twice. */
+  enviandose: number
 }) {
   const router = useRouter()
   const [paso, setPaso] = useState<Paso>('paquetes')
@@ -228,6 +230,8 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
         </div>
       ) : null}
 
+      {enviandose > 0 ? <p className="banner banner-ok" role="status">{textoDeEnviandose(enviandose)}</p> : null}
+
       {aviso ? (
         <div className={`banner ${aviso.tono === 'ok' ? 'banner-ok' : 'banner-error'} entrega-franja`} role={aviso.tono === 'ok' ? 'status' : 'alert'}>
           <p>{aviso.texto}</p>
@@ -236,7 +240,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       ) : null}
 
       {lineas.length === 0 ? (
-        <p className="lista-vacia">Odoo no tiene paquetes esperando entrega para este barco.</p>
+        <p className="lista-vacia">{textoSinPaquetes(enviandose)}</p>
       ) : (
         <section aria-labelledby="paquetes-rotulo">
           <h2 className="label" id="paquetes-rotulo">{textoDeSeleccion(resumen)}</h2>

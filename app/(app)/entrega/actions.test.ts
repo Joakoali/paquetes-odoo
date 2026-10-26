@@ -8,7 +8,7 @@ vi.mock('@/db/client', () => ({
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('@/lib/auth/current-operario', () => ({ requireOperarioFromCookies: vi.fn() }))
 vi.mock('@/lib/almacen-activo', () => ({ requireAlmacenActivo: vi.fn() }))
-vi.mock('@/lib/entrega/entregas', () => ({ registrarEntrega: vi.fn(), entregaGuardada: vi.fn() }))
+vi.mock('@/lib/entrega/entregas', () => ({ registrarEntrega: vi.fn(), entregaGuardada: vi.fn(), moveLineIdsRetenidas: vi.fn() }))
 // The action re-reads what Odoo has waiting for the barco: the one read it makes outside the queue.
 vi.mock('@/lib/odoo/pickings', () => ({ getLineasEntregaPendiente: vi.fn() }))
 vi.mock('@/lib/recepcion/recepciones', () => ({ enviarRecepcionesAbiertas: vi.fn() }))
@@ -18,7 +18,7 @@ import type { Almacen, Operario } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { UnauthorizedError } from '@/lib/auth/guards'
-import { entregaGuardada, registrarEntrega } from '@/lib/entrega/entregas'
+import { entregaGuardada, moveLineIdsRetenidas, registrarEntrega } from '@/lib/entrega/entregas'
 import { ErrorParaOperario, OdooError } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { enviarRecepcionesAbiertas } from '@/lib/recepcion/recepciones'
@@ -34,6 +34,7 @@ const SIN_PAQUETES = 'Elegí al menos un paquete.'
 const SIN_FIRMA = 'Falta la firma.'
 const ENTREGA_INVALIDA = 'Esa entrega no es válida. Volvé a abrir el barco.'
 const YA_NO_PENDIENTES = 'Algunos paquetes ya no están pendientes de entrega. Volvé a abrir el barco.'
+const EN_ENVIO = 'Algunos paquetes ya están en una entrega que se está enviando a Odoo. Volvé a abrir el barco.'
 
 const ID = '5f0c7a9e-3b1d-4c55-9a52-0d9a3c1e7b10'
 const FIRMA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg=='
@@ -66,6 +67,7 @@ beforeEach(() => {
   vi.mocked(requireOperarioFromCookies).mockResolvedValue(operario)
   vi.mocked(requireAlmacenActivo).mockResolvedValue(mb92)
   vi.mocked(getLineasEntregaPendiente).mockResolvedValue(lineasEnOdoo)
+  vi.mocked(moveLineIdsRetenidas).mockResolvedValue(new Set())
 })
 
 afterEach(() => {
@@ -214,8 +216,46 @@ describe('confirmarEntregaAction', () => {
 
       expect(entregaGuardada).toHaveBeenCalledWith(ID, mb92.id)
       expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
+      expect(moveLineIdsRetenidas).not.toHaveBeenCalled()
       expect(registrarEntrega).toHaveBeenCalledTimes(1)
       expect(registrarEntrega).toHaveBeenCalledWith(expect.objectContaining({ id: ID, almacenId: mb92.id, operarioId: operario.id }))
+    })
+  })
+
+  describe('lines that an entrega of this almacén and barco on its way to Odoo already holds', () => {
+    it('asks which lines are held for this almacén and barco, leaving out the entrega that is being confirmed', async () => {
+      await confirmarEntregaAction(entrada())
+
+      // Leaving out its own id is what lets a retry of the same entrega through while its own lines are held.
+      expect(moveLineIdsRetenidas).toHaveBeenCalledTimes(1)
+      expect(moveLineIdsRetenidas).toHaveBeenCalledWith({ almacenId: mb92.id, barcoOdooId: 673, exceptoId: ID })
+    })
+
+    it('rejects a held line with a plain message of its own, and registers nothing: it would be delivered twice', async () => {
+      vi.mocked(moveLineIdsRetenidas).mockResolvedValue(new Set([12]))
+
+      expect(await confirmarEntregaAction(entrada({ moveLineIds: [11, 12] }))).toEqual({ ok: false, error: EN_ENVIO })
+
+      expect(registrarEntrega).not.toHaveBeenCalled()
+      expect(revalidatePath).not.toHaveBeenCalled()
+    })
+
+    it('accepts the lines that are not held, whatever others are', async () => {
+      vi.mocked(moveLineIdsRetenidas).mockResolvedValue(new Set([12, 21]))
+
+      expect(await confirmarEntregaAction(entrada({ moveLineIds: [11] }))).toEqual({ ok: true, valor: undefined })
+
+      expect(registrarEntrega).toHaveBeenCalledWith(expect.objectContaining({ moveLineIds: [11], pickingIds: [700] }))
+    })
+
+    it('does not hide a failure to read what is held: nothing is registered', async () => {
+      const consola = silenciarConsoleError()
+      vi.mocked(moveLineIdsRetenidas).mockRejectedValue(new Error('connection refused'))
+
+      expect(await confirmarEntregaAction(entrada())).toEqual({ ok: false, error: GENERICO })
+
+      expect(consola).toHaveBeenCalled()
+      expect(registrarEntrega).not.toHaveBeenCalled()
     })
   })
 
