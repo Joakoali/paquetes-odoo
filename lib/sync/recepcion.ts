@@ -16,7 +16,9 @@ import { recordSyncedTrackings } from '../cache/trackingActivos'
 import { registrarAuditoria } from '../audit'
 import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
 
-const ALBARAN_CANCELADO = 'El albarán se canceló en Odoo.'
+/** Says which albarán, since the one who reads it in Pendientes has to find it in Odoo, and what to do: it will not come back. */
+const albaranCancelado = (ref: string) =>
+  `El albarán ${ref} se canceló en Odoo. Volvé a escanear los paquetes en una recepción nueva.`
 
 const TODOS_DUPLICADOS =
   'Todos los tracking numbers eran duplicados — no se creó ningún movimiento'
@@ -197,13 +199,14 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
     location_dest_id: [number, string]
   }>>('stock.picking', 'read', { ids: [pickingId], fields: ['location_id', 'location_dest_id', 'name', 'state'] })
   if (!picking) throw new Error(`picking ${pickingId} no existe en Odoo`)
-  if (picking.state === 'cancel') throw new RespuestaOdooInesperadaError(ALBARAN_CANCELADO)
-  const locationId = picking.location_id[0]
-  const locationDestId = picking.location_dest_id[0]
   const pickingRef = picking.name
+  // Stored before the cancelled check below throws, so that Pendientes can show which albarán it was.
   await db.update(sesionesEscaneo)
     .set({ odooPickingRef: pickingRef })
     .where(eq(sesionesEscaneo.id, sesionId))
+  if (picking.state === 'cancel') throw new RespuestaOdooInesperadaError(albaranCancelado(pickingRef))
+  const locationId = picking.location_id[0]
+  const locationDestId = picking.location_dest_id[0]
 
   const ponerMovimiento = pickingDeUnIntentoAnterior ? resumeCourierMoveWithLines : addCourierMoveWithLines
   for (const { batch, productId } of batchesToSend) {
@@ -244,7 +247,7 @@ export async function syncRecepcionSession(sesionId: string): Promise<void> {
       'stock.picking', 'read', { ids: [pickingId], fields: ['state'] },
     )
     if (!cur) throw new Error(`picking ${pickingId} no existe en Odoo`)
-    if (cur.state === 'cancel') throw new RespuestaOdooInesperadaError(ALBARAN_CANCELADO)
+    if (cur.state === 'cancel') throw new RespuestaOdooInesperadaError(albaranCancelado(pickingRef))
     if (cur.state !== 'done') {
       await validatePicking(pickingId)
     }

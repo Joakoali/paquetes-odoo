@@ -20,6 +20,7 @@ import { registrarFalloSync } from './estado'
 import { syncRecepcionSession } from './recepcion'
 
 const PICKING_REF = 'MB92/IN/00231'
+const ALBARAN_CANCELADO = `El albarán ${PICKING_REF} se canceló en Odoo. Volvé a escanear los paquetes en una recepción nueva.`
 
 interface Movimiento { id: number; picking_id: number; product_id: number; product_uom_qty: number; state: string }
 interface Linea { id: number; move_id: number; picking_id: number; lot_name: string }
@@ -316,10 +317,12 @@ describe('a picking that does not end up done', () => {
     const error = await syncRecepcionSession(sesion.id).catch((e) => e)
 
     expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
-    expect(error.message).toBe('El albarán se canceló en Odoo.')
+    expect(error.message).toBe(ALBARAN_CANCELADO)
     expect(clasificarError(error)).toBe('odoo') // not retried
     expect(await falla(sesion.id, error)).toEqual({ final: true, tipo: 'odoo' })
-    expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'error', ultimoError: 'El albarán se canceló en Odoo.' })
+    expect(await filaSesion(sesion.id)).toMatchObject({
+      estado: 'error', ultimoError: ALBARAN_CANCELADO, odooPickingRef: PICKING_REF,
+    })
   })
 
   it('puts nothing in a cancelled picking, and does not tell the cache its packages are in Odoo', async () => {
@@ -328,7 +331,7 @@ describe('a picking that does not end up done', () => {
     await expect(syncRecepcionSession(sesion.id)).rejects.toBeInstanceOf(OdooError)
     odoo.estadoDelPicking = 'cancel'
 
-    await expect(syncRecepcionSession(sesion.id)).rejects.toThrow('El albarán se canceló en Odoo.')
+    await expect(syncRecepcionSession(sesion.id)).rejects.toThrow(ALBARAN_CANCELADO)
 
     expect(odoo.movimientos).toHaveLength(0)
     expect(odoo.lineas).toHaveLength(0)

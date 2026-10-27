@@ -36,6 +36,7 @@ import { syncRecepcionSession } from './recepcion'
 
 const PICKING_ID = 501
 const PICKING_REF = 'MB92/IN/00231'
+const ALBARAN_CANCELADO = `El albarán ${PICKING_REF} se canceló en Odoo. Volvé a escanear los paquetes en una recepción nueva.`
 const RECIBIDO_POR = 'x_studio_recibido_por_2'
 
 let veronika: Operario
@@ -653,7 +654,7 @@ describe('syncRecepcionSession', () => {
       const error = await syncRecepcionSession(sesion.id).catch((e) => e)
 
       expect(error).toBeInstanceOf(RespuestaOdooInesperadaError)
-      expect(error.message).toBe('El albarán se canceló en Odoo.')
+      expect(error.message).toBe(ALBARAN_CANCELADO)
       expect(clasificarError(error)).toBe('odoo') // a retry would not bring it back
       // Found out before anything is put in it, and before the cache is told the packages are in Odoo.
       expect(resumeCourierMoveWithLines).not.toHaveBeenCalled()
@@ -661,7 +662,10 @@ describe('syncRecepcionSession', () => {
       expect(recordSyncedTrackings).not.toHaveBeenCalled()
       expect(validatePicking).not.toHaveBeenCalled()
       expect(llamadasAOdoo('stock.picking', 'message_post')).toEqual([])
-      expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', syncedAt: null })
+      // The picking is named on the sesión even though the sync stopped, so that Pendientes can say which one.
+      expect(await filaSesion(sesion.id)).toMatchObject({
+        estado: 'confirmada_pendiente_sync', syncedAt: null, odooPickingRef: PICKING_REF,
+      })
     })
 
     it('fails for a picking that is cancelled by the time it would be validated, and posts nothing on it', async () => {
@@ -673,7 +677,7 @@ describe('syncRecepcionSession', () => {
         return odooResponde(modelo, metodo, params) as never
       })
 
-      await expect(syncRecepcionSession(sesion.id)).rejects.toThrow('El albarán se canceló en Odoo.')
+      await expect(syncRecepcionSession(sesion.id)).rejects.toThrow(ALBARAN_CANCELADO)
 
       expect(validatePicking).not.toHaveBeenCalled()
       expect(llamadasAOdoo('stock.picking', 'message_post')).toEqual([])
