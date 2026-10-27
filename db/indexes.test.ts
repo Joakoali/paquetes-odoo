@@ -3,6 +3,9 @@ import { getTableConfig } from 'drizzle-orm/pg-core'
 import { createTestDb } from '@/lib/testing/test-db'
 import { sesionItems } from './schema'
 
+/** Creating the database runs every migration; with the whole suite running at once that takes longer than the default 5 s. */
+const TIEMPO_PARA_CREAR_LA_BASE = 30_000
+
 /** The index definitions (`CREATE INDEX ...`) Postgres has on the table, as the migrations left them. */
 async function indicesDe(tabla: string): Promise<string[]> {
   const db = await createTestDb()
@@ -21,7 +24,7 @@ describe('the indexes of sesion_items', () => {
     const definiciones = await indicesDe('sesion_items')
 
     expect(definiciones.some((definicion) => /USING btree \(tracking_number\)$/.test(definicion))).toBe(true)
-  })
+  }, TIEMPO_PARA_CREAR_LA_BASE)
 
   it('has it in the schema too, so that the next migration generated from it does not drop it', () => {
     const { indexes } = getTableConfig(sesionItems)
@@ -34,5 +37,5 @@ describe('the indexes of sesion_items', () => {
     const definiciones = await indicesDe('sesion_items')
 
     expect(definiciones.some((definicion) => /UNIQUE INDEX .* \(courier_batch_id, tracking_number\)$/.test(definicion))).toBe(true)
-  })
+  }, TIEMPO_PARA_CREAR_LA_BASE)
 })
