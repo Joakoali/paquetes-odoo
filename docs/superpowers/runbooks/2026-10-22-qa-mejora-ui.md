@@ -36,7 +36,7 @@
 
 Completar estos datos; el resto del runbook los usa.
 
-- **Barco de QA (Odoo):** ______________________ (id ______). Idealmente uno dedicado; no un barco con paquetes reales esperando entrega.
+- **Barco de QA (Odoo):** APHRODITE (id 474). Verificado el 2026-10-27: existe una sola vez, está activo, sin sesiones en la app y sin líneas pendientes de entrega en MB92. Es un barco real: lo que genere el QA (entregas encadenadas) se entrega o se cancela al terminar (§5).
 - **Almacén de QA:** MB92 (el de los operarios). Para el paso E, un almacén sin operarios reales: TGN (id 8).
 - **URL:** `https://paquetes-odoo.vercel.app`
 - **Usuarios:** Eduardo (`e.teixeira`) o Veronika (`v.shevchenko`) para el uso normal; `admin` para Pendientes y Admin.
