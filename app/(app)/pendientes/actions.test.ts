@@ -64,15 +64,23 @@ const noSeLlamoAlDominio = () => {
   expect(marcarRevisado).not.toHaveBeenCalled()
 }
 
-/** Each action with a word for what it does, and the function of the domain it ends in. */
+/**
+ * Each action with a word for what it does, the function of the domain it ends in, and what it hands that function
+ * for a sesión and whoever is calling. The review is told whether they are the admin: it is the session of the
+ * operario that says so, never anything the client sends.
+ */
 const ACCIONES: Array<[
   nombre: string, verbo: string, llamar: (sesionId: string) => Promise<ResultadoAccion>, dominio: () => typeof reintentar,
+  entrada: (sesionId: string, quien: Operario) => object,
 ]> = [
-  ['reintentarAction', 'retry', reintentarAction, () => reintentar],
-  ['marcarRevisadoAction', 'review', marcarRevisadoAction, () => marcarRevisado],
+  ['reintentarAction', 'retry', reintentarAction, () => reintentar, (sesionId, quien) => ({ sesionId, operarioId: quien.id })],
+  [
+    'marcarRevisadoAction', 'review', marcarRevisadoAction, () => marcarRevisado,
+    (sesionId, quien) => ({ sesionId, operarioId: quien.id, esAdmin: quien.rol === 'admin' }),
+  ],
 ]
 
-describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio) => {
+describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio, entrada) => {
   it('refuses a session from an almacén the operario does not have', async () => {
     const sesion = await crearSesion({ almacenId: mad1.id })
 
@@ -94,8 +102,8 @@ describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio) => {
     // Nobody checks the almacenes of an admin: they have no list of their own to be limited to.
     expect(operarioHasAlmacen).not.toHaveBeenCalled()
     expect(dominio()).toHaveBeenCalledTimes(2)
-    expect(dominio()).toHaveBeenNthCalledWith(1, { sesionId: deMad1.id, operarioId: admin.id })
-    expect(dominio()).toHaveBeenNthCalledWith(2, { sesionId: deMb92.id, operarioId: admin.id })
+    expect(dominio()).toHaveBeenNthCalledWith(1, entrada(deMad1.id, admin))
+    expect(dominio()).toHaveBeenNthCalledWith(2, entrada(deMb92.id, admin))
   })
 
   it('lets an operario with the almacén of the session do it, as themselves', async () => {
@@ -105,7 +113,7 @@ describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio) => {
 
     expect(operarioHasAlmacen).toHaveBeenCalledWith(operario.id, mb92.id)
     expect(dominio()).toHaveBeenCalledTimes(1)
-    expect(dominio()).toHaveBeenCalledWith({ sesionId: sesion.id, operarioId: operario.id })
+    expect(dominio()).toHaveBeenCalledWith(entrada(sesion.id, operario))
   })
 
   it.each(['recepcion', 'entrega'] as const)('works on the %s of an almacén the operario has', async (tipo) => {
@@ -113,7 +121,7 @@ describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio) => {
 
     expect(await llamar(sesion.id)).toEqual({ ok: true, valor: undefined })
 
-    expect(dominio()).toHaveBeenCalledWith({ sesionId: sesion.id, operarioId: operario.id })
+    expect(dominio()).toHaveBeenCalledWith(entrada(sesion.id, operario))
   })
 
   it('looks at the sesión it is asked for, not at another one', async () => {
@@ -189,7 +197,7 @@ describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio) => {
 
       expect(await llamar(NO_EXISTE)).toEqual({ ok: true, valor: undefined })
 
-      expect(dominio()).toHaveBeenCalledWith({ sesionId: NO_EXISTE, operarioId: admin.id })
+      expect(dominio()).toHaveBeenCalledWith(entrada(NO_EXISTE, admin))
     })
   })
 
@@ -213,6 +221,36 @@ describe.each(ACCIONES)('%s', (_nombre, verbo, llamar, dominio) => {
         expect(revalidatePath).not.toHaveBeenCalled()
       },
     )
+  })
+})
+
+describe('marcarRevisadoAction: who may mark what', () => {
+  // A failed send that nobody can fix (a picking cancelled in Odoo, say) is marked as resolved by the admin, and only
+  // by the admin. The action says who is calling, from their session; the domain only lets the admin's mark act on one.
+  it('tells the domain the caller is the admin, for the admin', async () => {
+    vi.mocked(requireOperarioFromCookies).mockResolvedValue(admin)
+    const sesion = await crearSesion({ almacenId: mad1.id })
+
+    await marcarRevisadoAction(sesion.id)
+
+    expect(marcarRevisado).toHaveBeenCalledWith({ sesionId: sesion.id, operarioId: admin.id, esAdmin: true })
+  })
+
+  it('tells the domain the caller is not the admin, for an operario, who has the almacén of the sesión', async () => {
+    const sesion = await crearSesion()
+
+    await marcarRevisadoAction(sesion.id)
+
+    expect(marcarRevisado).toHaveBeenCalledWith({ sesionId: sesion.id, operarioId: operario.id, esAdmin: false })
+  })
+
+  it('does not take the role from anything but the session: the action has no other argument to take it from', async () => {
+    const sesion = await crearSesion()
+
+    // A client can only send an id. Extra arguments are not read, whatever they say.
+    await (marcarRevisadoAction as (...args: unknown[]) => Promise<ResultadoAccion>)(sesion.id, true, { esAdmin: true })
+
+    expect(marcarRevisado).toHaveBeenCalledWith({ sesionId: sesion.id, operarioId: operario.id, esAdmin: false })
   })
 })
 

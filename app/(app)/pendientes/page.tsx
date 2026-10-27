@@ -17,7 +17,7 @@ const SESIONES: Record<Problema['sesionTipo'], string> = {
   entrega: 'Entrega',
 }
 
-function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
+function Tarjeta({ problema, ahora, esAdmin }: { problema: Problema; ahora: Date; esAdmin: boolean }) {
   const { sesionId, tipo } = problema
   const quienYCuando = [
     SESIONES[problema.sesionTipo], problema.almacenPrefijo, problema.operarioNombre, haceCuanto(problema.fecha, ahora),
@@ -53,15 +53,23 @@ function Tarjeta({ problema, ahora }: { problema: Problema; ahora: Date }) {
       ) : null}
 
       <div className="actions">
-        {/* A failed or a stuck send is solved by retrying it; only a duplicado is reviewed (spec 5.4). */}
+        {/* A failed or a stuck send is solved by retrying it; only a duplicado is reviewed (spec 5.4). A failure that
+            retrying never fixes (a picking cancelled in Odoo) is marked as resolved, by the admin and nobody else. */}
         {tipo === 'duplicado' ? (
           <AccionProblema accion={marcarRevisadoAction} sesionId={sesionId} className="btn btn-secondary">
             Marcar como revisado
           </AccionProblema>
         ) : (
-          <AccionProblema accion={reintentarAction} sesionId={sesionId} className="btn btn-primary">
-            Reintentar
-          </AccionProblema>
+          <>
+            <AccionProblema accion={reintentarAction} sesionId={sesionId} className="btn btn-primary">
+              Reintentar
+            </AccionProblema>
+            {tipo === 'error' && esAdmin ? (
+              <AccionProblema accion={marcarRevisadoAction} sesionId={sesionId} className="btn btn-secondary">
+                Marcar como resuelto
+              </AccionProblema>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -90,7 +98,7 @@ export default async function PendientesPage() {
       ) : (
         <ul>
           {problemas.map((problema) => (
-            <Tarjeta key={problema.sesionId} problema={problema} ahora={ahora} />
+            <Tarjeta key={problema.sesionId} problema={problema} ahora={ahora} esAdmin={operario.rol === 'admin'} />
           ))}
         </ul>
       )}

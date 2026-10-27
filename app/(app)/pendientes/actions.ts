@@ -39,12 +39,12 @@ async function exigirAcceso(operario: Operario, sesionId: string): Promise<void>
 /** What both actions do: check access, run the domain function for the operario of the session, refresh the screen. */
 function sobreLaSesion(
   sesionId: string,
-  trabajo: (entrada: { sesionId: string; operarioId: string }) => Promise<void>,
+  trabajo: (operario: Operario) => Promise<void>,
 ): Promise<ResultadoAccion> {
   return ejecutarAccion(async () => {
     const operario = await requireOperarioFromCookies()
     await exigirAcceso(operario, sesionId)
-    await trabajo({ sesionId, operarioId: operario.id })
+    await trabajo(operario)
     // Also when the domain had nothing to do: a screen that is out of date shows what is there now.
     revalidatePath('/pendientes')
   })
@@ -52,10 +52,16 @@ function sobreLaSesion(
 
 /** Puts a failed or stuck send back in the queue. */
 export async function reintentarAction(sesionId: string): Promise<ResultadoAccion> {
-  return sobreLaSesion(sesionId, reintentar)
+  return sobreLaSesion(sesionId, (operario) => reintentar({ sesionId, operarioId: operario.id }))
 }
 
-/** Marks a duplicado as looked at, so it stops being listed. Anything else is left as it is: see `marcarRevisado`. */
+/**
+ * Marks a duplicado as looked at, or, for the admin, a failed send as resolved, so it stops being listed. Anything
+ * else is left as it is: see `marcarRevisado`. Whether the caller is the admin comes from their session, never from
+ * the client, which sends nothing but the id.
+ */
 export async function marcarRevisadoAction(sesionId: string): Promise<ResultadoAccion> {
-  return sobreLaSesion(sesionId, marcarRevisado)
+  return sobreLaSesion(sesionId, (operario) => marcarRevisado({
+    sesionId, operarioId: operario.id, esAdmin: operario.rol === 'admin',
+  }))
 }

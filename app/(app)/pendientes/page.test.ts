@@ -20,6 +20,7 @@ import PendientesPage from './page'
 const AHORA = new Date('2026-10-23T12:00:00.000Z')
 
 const operario = { id: 'operario-1', nombre: 'Veronika', rol: 'operario' } as Operario
+const admin = { id: 'admin-1', nombre: 'Joaquín', rol: 'admin' } as Operario
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -301,6 +302,57 @@ describe('PendientesPage', () => {
 
       expect([reintentar.texto, reintentar.className]).toEqual(['Reintentar', 'btn btn-primary'])
       expect([revisar.texto, revisar.className]).toEqual(['Marcar como revisado', 'btn btn-secondary'])
+    })
+
+    describe('Marcar como resuelto: for the admin, on a failed send', () => {
+      // Some failures are permanent (a picking cancelled in Odoo): retrying never takes them off the list, so the
+      // admin, and only the admin, can mark them as resolved. It is the same review as for a duplicado, with its own word.
+      it('is offered to the admin next to Reintentar, and only on an error', async () => {
+        vi.mocked(requireOperarioFromCookies).mockResolvedValue(admin)
+
+        const todos = await botones(
+          problema({ sesionId: 'sesion-a', tipo: 'error' }),
+          problema({ sesionId: 'sesion-b', tipo: 'trabado' }),
+          problema({ sesionId: 'sesion-c', tipo: 'duplicado' }),
+        )
+
+        expect(todos.map((boton) => [boton.texto, nombreDe(boton.accion), boton.sesionId, boton.className])).toEqual([
+          ['Reintentar', 'reintentarAction', 'sesion-a', 'btn btn-primary'],
+          ['Marcar como resuelto', 'marcarRevisadoAction', 'sesion-a', 'btn btn-secondary'],
+          ['Reintentar', 'reintentarAction', 'sesion-b', 'btn btn-primary'],
+          ['Marcar como revisado', 'marcarRevisadoAction', 'sesion-c', 'btn btn-secondary'],
+        ])
+      })
+
+      it('is offered on the error of an entrega and on one that the admin has to fix', async () => {
+        vi.mocked(requireOperarioFromCookies).mockResolvedValue(admin)
+
+        const textos = (await botones(
+          problema({ sesionId: 'a', tipo: 'error', sesionTipo: 'entrega' }),
+          problema({ sesionId: 'b', tipo: 'error', loArreglaElAdmin: true }),
+        )).map((boton) => boton.texto)
+
+        expect(textos).toEqual(['Reintentar', 'Marcar como resuelto', 'Reintentar', 'Marcar como resuelto'])
+      })
+
+      it('is never offered to an operario, on any problem', async () => {
+        const todos = await html(
+          problema({ sesionId: 'a', tipo: 'error', sesionTipo: 'recepcion' }),
+          problema({ sesionId: 'b', tipo: 'error', sesionTipo: 'entrega', loArreglaElAdmin: true }),
+          problema({ sesionId: 'c', tipo: 'trabado' }),
+          problema({ sesionId: 'd', tipo: 'duplicado' }),
+        )
+
+        expect(todos).not.toContain('Marcar como resuelto')
+        expect(todos.match(/>Reintentar</g)).toHaveLength(3)
+        expect(todos.match(/>Marcar como revisado</g)).toHaveLength(1)
+      })
+
+      it('is never offered on a stuck send, not even to the admin: only retrying takes it out', async () => {
+        vi.mocked(requireOperarioFromCookies).mockResolvedValue(admin)
+
+        expect((await botones(problema({ tipo: 'trabado' }))).map((boton) => boton.texto)).toEqual(['Reintentar'])
+      })
     })
 
     it('never offer Marcar como revisado on a failed or a stuck send, wherever the problem comes from', async () => {

@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
-vi.mock('@/lib/queue/publish', () => ({ publishSync: vi.fn() }))
+vi.mock('@/lib/queue/publish', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/queue/publish')>()),
+  publishSync: vi.fn(),
+}))
 vi.mock('@/lib/audit', () => ({ registrarAuditoria: vi.fn() }))
 
 import { eq } from 'drizzle-orm'
@@ -15,6 +18,7 @@ import { mensajeProblema } from '@/lib/errores'
 import { publishSync } from '@/lib/queue/publish'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
+import { registrarFalloSync } from './estado'
 import {
   alcanceDelOperario, contarProblemas, listarProblemas, marcarRevisado, MINUTOS_TRABADO, reintentar,
   type Alcance,
@@ -30,6 +34,7 @@ const NO_EXISTE = '00000000-0000-4000-8000-000000000000'
 
 let veronika: Operario
 let eduardo: Operario
+let admin: Operario
 let mb92: Almacen
 let mad1: Almacen
 let dhl: Courier
@@ -40,6 +45,7 @@ beforeEach(async () => {
   await resetTestDb(db as unknown as TestDb)
   veronika = await seedOperario(db, { nombre: 'Veronika' })
   eduardo = await seedOperario(db, { nombre: 'Eduardo' })
+  admin = await seedOperario(db, { nombre: 'Joaquín', rol: 'admin' })
   mb92 = await seedAlmacen(db)
   mad1 = await seedAlmacen(db, { prefijo: 'MAD1', nombre: 'Madrid (MAD1)', odooWarehouseId: 2, odooInTypeId: 3, odooOutTypeId: 4 })
   dhl = await seedCourier(db)
@@ -143,14 +149,21 @@ describe('listarProblemas', () => {
     expect(await idsDe('todos')).toEqual([sinRevisar.id])
   })
 
-  it('a failed or stuck send is listed whatever its review says: only a duplicado can be reviewed', async () => {
-    // A review on a send that is not a duplicado never gets in through marcarRevisado; if one is there anyway it
-    // does not hide the failure from everybody.
-    const error = await enError({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
+  it('a stuck send is listed whatever its review says: it leaves by being retried and synced, never by a review', async () => {
+    // A review on a stuck send never gets in through marcarRevisado; if one is there anyway it does not hide it.
     const envioTrabado = await trabada({ revisadoAt: haceMinutos(5), revisadoPor: eduardo.id })
 
-    expect(await idsDe('todos')).toEqual([error.id, envioTrabado.id])
-    expect(await contarProblemas('todos', AHORA)).toBe(2)
+    expect(await idsDe('todos')).toEqual([envioTrabado.id])
+    expect(await contarProblemas('todos', AHORA)).toBe(1)
+  })
+
+  it('a failed send the admin marked as resolved is not listed, and the other failed sends are', async () => {
+    await enError({ revisadoAt: haceMinutos(5), revisadoPor: admin.id })
+    const sinResolver = await enError({ barcoOdooId: 674 })
+
+    expect(await idsDe('todos')).toEqual([sinResolver.id])
+    expect(await idsDe({ almacenIds: [mb92.id] })).toEqual([sinResolver.id])
+    expect(await contarProblemas('todos', AHORA)).toBe(1)
   })
 
   it('flags configuration errors for the admin', async () => {
@@ -470,6 +483,7 @@ describe('contarProblemas', () => {
     await conDuplicado()
     await conDuplicado({ almacenId: mad1.id })
     await conDuplicado({ revisadoAt: haceMinutos(1), revisadoPor: veronika.id, barcoOdooId: 675 }) // reviewed
+    await enError({ revisadoAt: haceMinutos(1), revisadoPor: admin.id, barcoOdooId: 677 }) // resolved by the admin
     await crearSesion({ estado: 'en_curso', barcoOdooId: 676 })
 
     const alcances: Alcance[] = [
@@ -691,7 +705,7 @@ describe('marcarRevisado', () => {
     expect(registrarAuditoria).toHaveBeenCalledWith({
       operarioId: eduardo.id,
       accion: 'revisado',
-      detalle: { sesionId: sesion.id, almacenId: mad1.id, barcoOdooId: 674 },
+      detalle: { sesionId: sesion.id, almacenId: mad1.id, barcoOdooId: 674, tipo: 'duplicado' },
     })
   })
 
@@ -794,5 +808,144 @@ describe('marcarRevisado', () => {
     await marcarRevisado({ sesionId: revisada.id, operarioId: veronika.id })
 
     expect(await filaSesion(otra.id)).toMatchObject({ revisadoAt: null, revisadoPor: null })
+  })
+})
+
+describe('marcarRevisado by the admin: the failed sends that nobody can fix', () => {
+  // A failed send leaves Pendientes when it is retried and synced. Some never will (a picking somebody cancelled in
+  // Odoo, a package that is not on the delivery any more): the admin, and only the admin, can mark them as resolved.
+  const comoAdmin = (sesionId: string) => marcarRevisado({ sesionId, operarioId: admin.id, esAdmin: true })
+
+  it('makes an error leave every list, the admin\'s included, and the count; sets who and when, and audits it as revisado', async () => {
+    const error = await enError({ almacenId: mad1.id, barcoOdooId: 674 })
+    const otra = await enError({ barcoOdooId: 675 })
+    const antes = Date.now()
+
+    await comoAdmin(error.id)
+
+    const fila = await filaSesion(error.id)
+    expect(fila.revisadoPor).toBe(admin.id)
+    expect(fila.revisadoAt!.getTime()).toBeGreaterThanOrEqual(antes)
+    expect(fila.revisadoAt!.getTime()).toBeLessThan(antes + 5_000)
+    // It is a note, not a fix: the sesión is still a failed one, and nothing is queued.
+    expect(fila.estado).toBe('error')
+    expect(publishSync).not.toHaveBeenCalled()
+    expect(await idsDe('todos')).toEqual([otra.id])
+    expect(await idsDe({ almacenIds: [mad1.id] })).toEqual([])
+    expect(await contarProblemas('todos', AHORA)).toBe(1)
+    expect(await contarProblemas({ almacenIds: [mad1.id] }, AHORA)).toBe(0)
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1)
+    expect(registrarAuditoria).toHaveBeenCalledWith({
+      operarioId: admin.id,
+      accion: 'revisado',
+      detalle: { sesionId: error.id, almacenId: mad1.id, barcoOdooId: 674, tipo: 'error' },
+    })
+  })
+
+  it('does nothing for an operario: the error stays listed, nothing is changed and nothing is audited', async () => {
+    const error = await enError()
+    const antes = await filaSesion(error.id)
+
+    await marcarRevisado({ sesionId: error.id, operarioId: veronika.id, esAdmin: false })
+    await marcarRevisado({ sesionId: error.id, operarioId: veronika.id })
+
+    expect(await filaSesion(error.id)).toEqual(antes)
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+    expect(await idsDe('todos')).toEqual([error.id])
+    expect(await idsDe({ almacenIds: [mb92.id] })).toEqual([error.id])
+  })
+
+  it.each([
+    ['a stuck send: only retrying takes it out', () => trabada()],
+    ['a send that was retried and is waiting for its sync', () => crearSesion({ estado: 'confirmada_pendiente_sync', confirmedAt: haceMinutosReales(1) })],
+    ['a send that is waiting for its sync with a package already flagged', async () => {
+      const sesion = await crearSesion({ estado: 'confirmada_pendiente_sync', confirmedAt: haceMinutosReales(1) })
+      await agregarPaquete(sesion.id, 'JJD-DUP', { estado: 'duplicado', duplicadoAlEnviar: true, duplicadoRef: 'MB92/IN/00198' })
+      return sesion
+    }],
+    ['an open recepción', () => crearSesion({ estado: 'en_curso', confirmedAt: null })],
+    ['a synced recepción with nothing left out when it was sent', () => crearSesion({ estado: 'sincronizada' })],
+  ])('does nothing for %s, not even for the admin: no review, no audit', async (_caso, crear) => {
+    const sesion = await crear()
+    const antes = await filaSesion(sesion.id)
+
+    await comoAdmin(sesion.id)
+
+    expect(await filaSesion(sesion.id)).toEqual(antes)
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('does nothing for a stale screen that resolves an error after somebody retried it', async () => {
+    const sesion = await enError()
+    await reintentar({ sesionId: sesion.id, operarioId: eduardo.id })
+    vi.mocked(registrarAuditoria).mockClear()
+
+    await comoAdmin(sesion.id)
+
+    expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'confirmada_pendiente_sync', revisadoAt: null, revisadoPor: null })
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('still reviews a duplicado, as it does for anybody, and says it was a duplicado', async () => {
+    const sesion = await conDuplicado()
+
+    await comoAdmin(sesion.id)
+
+    expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', revisadoPor: admin.id })
+    expect(await idsDe('todos')).toEqual([])
+    expect(registrarAuditoria).toHaveBeenCalledWith({
+      operarioId: admin.id,
+      accion: 'revisado',
+      detalle: { sesionId: sesion.id, almacenId: mb92.id, barcoOdooId: 673, tipo: 'duplicado' },
+    })
+  })
+
+  it('keeps who resolved it first when it is done again with an old screen', async () => {
+    const error = await enError()
+    const otroAdmin = await seedOperario(db, { nombre: 'Marta', rol: 'admin' })
+    await comoAdmin(error.id)
+    const despuesDeLaPrimera = await filaSesion(error.id)
+    vi.mocked(registrarAuditoria).mockClear()
+
+    await marcarRevisado({ sesionId: error.id, operarioId: otroAdmin.id, esAdmin: true })
+
+    expect(await filaSesion(error.id)).toEqual(despuesDeLaPrimera)
+    expect(registrarAuditoria).not.toHaveBeenCalled()
+  })
+
+  it('touches only the sesión it is asked for', async () => {
+    const resuelta = await enError()
+    const otra = await enError({ barcoOdooId: 674 })
+
+    await comoAdmin(resuelta.id)
+
+    expect(await filaSesion(otra.id)).toMatchObject({ revisadoAt: null, revisadoPor: null })
+    expect(await idsDe('todos')).toEqual([otra.id])
+  })
+
+  describe('a new final failure brings the problem back', () => {
+    it('after it was retried and failed for good again', async () => {
+      const error = await enError()
+      await comoAdmin(error.id)
+      expect(await idsDe('todos')).toEqual([])
+
+      await reintentar({ sesionId: error.id, operarioId: admin.id })
+      const falla = await registrarFalloSync({ sesionId: error.id, error: new Error('Odoo rechazó el envío'), reintentosHechos: 0 })
+
+      expect(falla.final).toBe(true)
+      expect(await filaSesion(error.id)).toMatchObject({ estado: 'error', revisadoAt: null, revisadoPor: null })
+      expect(await idsDe('todos')).toEqual([error.id])
+      expect(await contarProblemas('todos', AHORA)).toBe(1)
+    })
+
+    it('even when the review was still there, as a final failure clears it', async () => {
+      const sesion = await crearSesion({
+        estado: 'confirmada_pendiente_sync', confirmedAt: haceMinutos(5), revisadoAt: haceMinutos(3), revisadoPor: admin.id,
+      })
+
+      await registrarFalloSync({ sesionId: sesion.id, error: new Error('Odoo rechazó el envío'), reintentosHechos: 0 })
+
+      expect(await idsDe('todos')).toEqual([sesion.id])
+    })
   })
 })

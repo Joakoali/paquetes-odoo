@@ -79,9 +79,8 @@ function tipoDeProblema(estado: SesionEscaneo['estado']): TipoProblema {
 
 /**
  * A recepción that synced and left a package out because Odoo already had it when it was sent, and that nobody has
- * reviewed. It is the only problem that can be reviewed: a failed or a stuck send is not in Odoo, and it leaves
- * Pendientes when it is retried and synced, never by somebody saying they looked at it. A duplicado found while
- * scanning (`duplicadoAlEnviar` false) is not one: the operario saw it on the spot.
+ * reviewed. Anybody can review it. A duplicado found while scanning (`duplicadoAlEnviar` false) is not one: the
+ * operario saw it on the spot.
  *
  * As a WHERE, for the list, the count and the review at once, so that what is listed and what can be reviewed
  * are the same thing and can never disagree: a review can only be set on a sesión that is a duplicado now.
@@ -97,10 +96,21 @@ function esDuplicadoSinRevisar() {
 }
 
 /**
+ * A send that failed for good and that the admin has not marked as resolved. A failed send is not in Odoo and
+ * leaves Pendientes when it is retried and synced; the mark is for those that never will (a picking somebody
+ * cancelled in Odoo, a package that is not on the delivery any more), and only the admin can set it.
+ *
+ * As a WHERE, for the list, the count and the mark at once, for the same reason as `esDuplicadoSinRevisar`.
+ */
+function esErrorSinResolver() {
+  return and(eq(sesionesEscaneo.estado, 'error'), isNull(sesionesEscaneo.revisadoAt))
+}
+
+/**
  * What makes a sesión a problem, as the WHERE of a query, for the list and for the count at once so that the
- * two can never disagree. A sesión is one if it is in the scope and it is in `error`; or waiting for its sync
- * since before the stuck limit; or a duplicado nobody has reviewed. A review does not hide the other two, even
- * if one is there: it is only for a duplicado.
+ * two can never disagree. A sesión is one if it is in the scope and it is in `error` and nobody has marked it as
+ * resolved; or waiting for its sync since before the stuck limit; or a duplicado nobody has reviewed. A review
+ * does not hide a stuck send, even if one is there: it leaves by being retried and synced.
  */
 function esProblema(alcance: Alcance, ahora: Date) {
   const limiteDeTrabado = new Date(ahora.getTime() - MINUTOS_TRABADO * 60_000)
@@ -109,7 +119,7 @@ function esProblema(alcance: Alcance, ahora: Date) {
     // An empty list of almacenes matches nothing.
     alcance === 'todos' ? undefined : inArray(sesionesEscaneo.almacenId, alcance.almacenIds),
     or(
-      eq(sesionesEscaneo.estado, 'error'),
+      esErrorSinResolver(),
       and(eq(sesionesEscaneo.estado, 'confirmada_pendiente_sync'), lt(sesionesEscaneo.confirmedAt, limiteDeTrabado)),
       esDuplicadoSinRevisar(),
     ),
@@ -256,27 +266,37 @@ export async function reintentar(entrada: { sesionId: string; operarioId: string
 }
 
 /**
- * Notes that somebody looked at a duplicado, so that it stops being listed. Only a duplicado can be reviewed:
- * for a failed or a stuck send, an open recepción, an entrega or anything that is not synced with a package left
- * out, it does nothing at all (no change, no audit). That is checked by the update itself, with the condition
- * the list uses for a duplicado, so a screen that is out of date (showing as a problem a send somebody has
- * retried since) cannot stamp a send that is still on its way, nor hide a failure from everybody.
+ * Notes that somebody looked at a problem, so that it stops being listed. A duplicado can be reviewed by anybody;
+ * a failed send (`error`) only by the admin, who marks it as resolved when retrying will never fix it (see
+ * `esErrorSinResolver`). For anything else (a stuck send, an open recepción, a synced one with nothing left out)
+ * it does nothing at all, no change and no audit, and so it does for an operario's attempt on a failed send.
+ * That is checked by the update itself, with the conditions the list uses, so a screen that is out of date
+ * (showing as a problem a send somebody has retried since) cannot stamp a send that is still on its way.
  *
- * It changes nothing else. The first review is the one that stays (who and when), so an old screen that reviews
- * it a second time changes and audits nothing.
+ * `esAdmin` is whether the one calling is the admin. The domain trusts it: the server action takes it from the
+ * session, never from the client.
+ *
+ * It changes nothing else: a failed send stays in `error`. The first review is the one that stays (who and
+ * when), so an old screen that reviews it a second time changes and audits nothing. A retry clears it, and so
+ * does a new final failure (`registrarFalloSync`): the problem is listed again.
  */
-export async function marcarRevisado(entrada: { sesionId: string; operarioId: string }): Promise<void> {
-  const { sesionId, operarioId } = entrada
+export async function marcarRevisado(entrada: { sesionId: string; operarioId: string; esAdmin?: boolean }): Promise<void> {
+  const { sesionId, operarioId, esAdmin = false } = entrada
 
   const [sesion] = await db.update(sesionesEscaneo)
     .set({ revisadoAt: new Date(), revisadoPor: operarioId })
-    .where(and(eq(sesionesEscaneo.id, sesionId), esDuplicadoSinRevisar()))
-    .returning({ almacenId: sesionesEscaneo.almacenId, barcoOdooId: sesionesEscaneo.barcoOdooId })
+    .where(and(
+      eq(sesionesEscaneo.id, sesionId),
+      esAdmin ? or(esDuplicadoSinRevisar(), esErrorSinResolver()) : esDuplicadoSinRevisar(),
+    ))
+    .returning({
+      almacenId: sesionesEscaneo.almacenId, barcoOdooId: sesionesEscaneo.barcoOdooId, estado: sesionesEscaneo.estado,
+    })
   if (!sesion) return
 
   await registrarAuditoria({
     operarioId,
     accion: 'revisado',
-    detalle: { sesionId, almacenId: sesion.almacenId, barcoOdooId: sesion.barcoOdooId },
+    detalle: { sesionId, almacenId: sesion.almacenId, barcoOdooId: sesion.barcoOdooId, tipo: tipoDeProblema(sesion.estado) },
   })
 }
