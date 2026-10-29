@@ -11,23 +11,30 @@
 | Commit | Cambio | Riesgo |
 | --- | --- | --- |
 | `217f37d` | Filtro por tracking nº en las listas: los paquetes de un barco en Entrega, los de una recepción (abierta o enviada) y las tarjetas de Pendientes. El `q` de la dirección abre la lista ya filtrada. | Bajo. En la tablet el filtro convive con la pistola (§3). |
-| `4df8be9` | Cada entrega guarda qué paquetes entregó (`paquetes_entrega`, migración `0004`). Pendientes lista los tracking de una entrega. | Bajo. **`0004` va antes del deploy** (§5). |
+| `4df8be9` | Cada entrega guarda qué paquetes entregó (`paquetes_entrega`, migración `0004`). Pendientes lista los tracking de una entrega. | Bajo. **`0004` va antes del merge** (§2). |
 | `42fb0fa` | Pestaña **Buscar**: dónde está un paquete, en la webapp y en Odoo (2 lecturas por búsqueda, solo al buscar), de todos los almacenes, y solo se abre lo que el operario tiene permitido. Además: "Buscar «X» como tracking nº" en los buscadores de barcos, `/buscar` detrás del proxy y las 5 pestañas del admin. | Bajo. Solo lee Odoo. |
 
 ---
 
 ## 2. Orden
 
-1. Aplicar la migración `0004` (§5). Va **antes** del deploy: el código nuevo guarda esa columna en cada entrega. El código anterior no la conoce y la ignora, así que migrar primero es seguro.
-2. Desplegar desde la rama (o desde `mejora-ui-revision`, si el PR ya se mergeó):
+1. Aplicar la migración `0004` (§5) **antes de mergear el PR**.
+   - **Por qué antes del merge:** Vercel ahora está conectado al repo. Mergear en `mejora-ui-revision`, que es su rama de producción salvo que se haya configurado otra, despliega producción solo, sin `vercel --prod`.
+   - **Qué pasa sin la columna:** el código nuevo la escribe al confirmar una entrega y la lee en Pendientes y en Buscar. Fallarían las tres.
+   - **Por qué migrar primero es seguro:** el código anterior no la conoce y la ignora.
+2. Mergear el PR.
+   - En Vercel, comprobar que el deploy de producción sea el del merge commit y que haya terminado.
+   - Si la rama de producción de Vercel no es `mejora-ui-revision`, el merge no despliega nada. En ese caso, desplegar a mano como antes:
 
    ```powershell
-   git fetch origin claude/youthful-hawking-ciqpqn
-   git switch --detach origin/claude/youthful-hawking-ciqpqn
+   git fetch origin mejora-ui-revision
+   git switch --detach origin/mejora-ui-revision
    vercel --prod
    ```
 
 3. Los chequeos de §3 y la entrega de QA de §4.
+
+El Preview que Vercel arma para la rama usa sus propias variables de entorno. Si apunta a la base de producción, también falla en Pendientes, en Buscar y al confirmar una entrega hasta que se aplique `0004`. No hace falta usarlo para el QA.
 
 ---
 
@@ -96,6 +103,8 @@ Agregar una columna que admite null y no tiene default no reescribe la tabla, as
 ## 6. Si algo sale mal
 
 `vercel rollback` vuelve al deploy anterior. La columna de `0004` puede quedar: el código anterior la ignora.
+
+Si se mergeó antes de aplicar `0004` y producción ya se desplegó, aplicarla en cuanto se note (§5). No hace falta volver a desplegar: cada request lee la base de nuevo, así que confirmar una entrega, Pendientes y Buscar vuelven a andar apenas existe la columna.
 
 ---
 
