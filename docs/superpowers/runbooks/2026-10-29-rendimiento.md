@@ -18,18 +18,37 @@
 | `9c66a91` | Pantallas de carga en Entrega, barco de Entrega y Pendientes. No en Recepción, a propósito. | Bajo |
 | `ef51c9a` | Las Server Actions (cada escaneo) ya no pasan por `proxy.ts`. | Bajo |
 | `6a131d6` | Worker de recepción: solo `button_validate`, y movimiento + líneas en una llamada (11 → 8 llamadas con un courier). | **Escribe en Odoo:** va aparte, con QA inmediato (§4) |
+| `3e32b28` | Lo que encontró la revisión: `refresh()` explícito en "Enviar ahora", la marca de "sin respuesta" y la condición de recepción abierta en un solo lugar. | Bajo |
 
 ---
 
 ## 2. Orden
 
-1. Desplegar hasta `ef51c9a` (commits 1–7) y hacer los chequeos de §3.
+El commit del worker quedó en el medio de la rama: después vienen este runbook y las correcciones de la revisión. Para desplegarlo aparte no hace falta reescribir el historial: el primer deploy sale de un checkout con el worker revertido, y ese revert no llega a ninguna rama.
+
+1. Todo menos el worker, y los chequeos de §3:
+
+   ```powershell
+   git fetch origin claude/youthful-hawking-ciqpqn
+   git switch --detach origin/claude/youthful-hawking-ciqpqn
+   git revert --no-edit 6a131d6
+   vercel --prod
+   ```
+
+   El revert entra sin conflictos: el worker solo toca `lib/odoo/pickings.ts` y dos tests, y ningún commit posterior los cambia. Con el revert, el typecheck y los tests siguen en verde.
 2. Aplicar `0003` (§5). Puede ir antes o después del paso 1.
-3. Desplegar `6a131d6` solo, y hacer enseguida la recepción de QA de §4.
+3. El worker: la rama tal cual, y enseguida la recepción de QA de §4.
+
+   ```powershell
+   git switch --detach origin/claude/youthful-hawking-ciqpqn
+   vercel --prod
+   ```
+
+   Git avisa que deja atrás un commit suelto: es el revert del paso 1, que ya no hace falta.
 
 ---
 
-## 3. Chequeos de los commits 1–7
+## 3. Chequeos de todo menos el worker
 
 - [ ] **Tablet:** 10 códigos seguidos y rápidos en una recepción del barco de QA: 10 filas, en orden, ninguna perdida. En DevTools → Network, cada POST con `Next-Action` tarda menos que antes. Resultado: ______
 - [ ] **Sesión vencida:** con la cookie `paqueteria_session` borrada, un escaneo responde "Tu sesión venció. Volvé a entrar." (antes: "No hubo respuesta del servidor"). Resultado: ______
@@ -51,7 +70,7 @@
 - [ ] "Recibido por" con el nombre de quien escaneó, nota en el chatter, y entrega encadenada (`MB92/OUT/…`) generada. Resultado: ______
 - [ ] En la consola de QStash, el job de `sync-session` tardó menos que los anteriores (~8–9 s en vez de ~12–13 s). Resultado: ______
 
-**Si el picking no queda `done`** (la recepción aparece en Pendientes con "Odoo no validó el albarán" o "Odoo pidió confirmar"): `vercel rollback` al deploy anterior y "Reintentar" en Pendientes. El reintento retoma el picking donde quedó: no crea movimientos de nuevo, y valida como antes.
+**Si el picking no queda `done`** (la recepción aparece en Pendientes con "Odoo no validó el albarán" o "Odoo pidió confirmar"): `vercel rollback`, que vuelve al deploy del paso 1 de §2 (todo menos el worker), y "Reintentar" en Pendientes. El reintento retoma el picking donde quedó: no crea movimientos de nuevo, y valida como antes.
 
 ---
 
