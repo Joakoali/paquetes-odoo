@@ -87,6 +87,11 @@ describe('confirmarEntregaAction', () => {
       barcoOdooId: 673,
       pickingIds: [700],
       moveLineIds: [11, 12],
+      // What those lines are, as Odoo lists them: the entrega keeps it.
+      paquetes: [
+        { trackingNumber: 'T11', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
+        { trackingNumber: 'T12', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
+      ],
       receptorNombre: 'Tom Baker',
       // As the canvas made it: the domain strips the `data:image/png;base64,`.
       firmaBase64: FIRMA,
@@ -223,6 +228,8 @@ describe('confirmarEntregaAction', () => {
       expect(moveLineIdsRetenidas).not.toHaveBeenCalled()
       expect(registrarEntrega).toHaveBeenCalledTimes(1)
       expect(registrarEntrega).toHaveBeenCalledWith(expect.objectContaining({ id: ID, almacenId: mb92.id, operarioId: operario.id }))
+      // Nothing of what the retry sends is used: the packages the first try saved stay as they are.
+      expect(registrarEntrega).toHaveBeenCalledWith(expect.objectContaining({ moveLineIds: [], pickingIds: [], paquetes: [] }))
     })
   })
 

@@ -245,6 +245,19 @@ describe('PendientesPage', () => {
       expect(pagina.match(/ya estaba en/g)).toHaveLength(1)
     })
 
+    it('lists the packages an entrega handed over under how many it covers, with no place in Odoo to say', async () => {
+      const pagina = await html(problema({
+        sesionTipo: 'entrega',
+        entrega: { paquetes: 3, receptorNombre: 'Tom Baker' },
+        paquetes: [{ trackingNumber: 'JJD000390007840588', ref: null }, { trackingNumber: '1Z999AA10123456784', ref: null }],
+      }))
+
+      expect(pagina).toContain('3 paquetes · recibió Tom Baker')
+      expect(pagina).toContain('JJD000390007840588')
+      expect(pagina).toContain('1Z999AA10123456784')
+      expect(pagina).not.toContain('ya estaba en')
+    })
+
     it('lists the packages in the order it is given them', async () => {
       const pagina = await html(problema({
         paquetes: [

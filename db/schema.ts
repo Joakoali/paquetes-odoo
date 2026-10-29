@@ -14,6 +14,16 @@ export const estadoItemEnum = pgEnum('estado_item', [
 ])
 export const errorTipoEnum = pgEnum('error_tipo', ['configuracion', 'odoo', 'conexion'])
 
+/** A package an entrega handed over, as Odoo listed it when the entrega was confirmed. */
+export interface PaqueteEntregado {
+  /** Null for a line without lot: a product that is not tracked by serial number has no package number. */
+  trackingNumber: string | null
+  /** The product of the line, which is the courier. */
+  courierNombre: string
+  /** The delivery the line was on, e.g. `MB92/OUT/00487`. */
+  pickingRef: string
+}
+
 export const operarios = pgTable('operarios', {
   id: uuid('id').primaryKey().defaultRandom(),
   nombre: text('nombre').notNull(),
@@ -86,6 +96,9 @@ export const sesionesEscaneo = pgTable('sesiones_escaneo', {
   odooPickingRef: text('odoo_picking_ref'),
   receptorNombre: text('receptor_nombre'),
   odooMoveLineIds: jsonb('odoo_move_line_ids').$type<number[]>(),
+  // What the move lines of an entrega were: the only place the webapp keeps which packages it handed over, which Pendientes
+  // and the search of a package read. Null for a recepción, and for an entrega confirmed before it was kept.
+  paquetesEntrega: jsonb('paquetes_entrega').$type<PaqueteEntregado[]>(),
   firmaData: text('firma_data'),
   intentos: integer('intentos').notNull().default(0),
   ultimoError: text('ultimo_error'),

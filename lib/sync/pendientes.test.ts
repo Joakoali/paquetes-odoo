@@ -373,7 +373,7 @@ describe('listarProblemas', () => {
       expect(problema.fecha).toEqual(haceMinutos(300))
     })
 
-    it('describes an entrega, which has no tracking numbers of its own to list, by how many packages it covers and who received them', async () => {
+    it('describes an entrega confirmed before the entregas kept their packages by how many it covers and who received them', async () => {
       const entrega = await enError({
         tipo: 'entrega', operarioId: eduardo.id, ultimoErrorTipo: 'configuracion',
         odooMoveLineIds: [11, 12, 13], receptorNombre: 'Capitán Pérez',
@@ -385,6 +385,28 @@ describe('listarProblemas', () => {
         sesionId: entrega.id, tipo: 'error', sesionTipo: 'entrega', operarioNombre: 'Eduardo', paquetes: [], loArreglaElAdmin: true,
         entrega: { paquetes: 3, receptorNombre: 'Capitán Pérez' },
       })
+    })
+
+    it('lists the packages an entrega handed over, in the order it kept them, the ones without number left out of the list but counted', async () => {
+      await enError({
+        tipo: 'entrega',
+        odooMoveLineIds: [11, 12, 13],
+        receptorNombre: 'Capitán Pérez',
+        paquetesEntrega: [
+          { trackingNumber: 'JJD000390007840588', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
+          { trackingNumber: null, courierNombre: 'UPS (incorrecto)', pickingRef: 'MB92/OUT/00700' },
+          { trackingNumber: '1Z999AA10123456784', courierNombre: 'UPS', pickingRef: 'MB92/OUT/00701' },
+        ],
+      })
+
+      const [problema] = await listarProblemas('todos', AHORA)
+
+      // Not where Odoo "already had" them: they are the entrega's own, and the card says nothing of the kind.
+      expect(problema.paquetes).toEqual([
+        { trackingNumber: 'JJD000390007840588', ref: null },
+        { trackingNumber: '1Z999AA10123456784', ref: null },
+      ])
+      expect(problema.entrega).toEqual({ paquetes: 3, receptorNombre: 'Capitán Pérez' })
     })
 
     it('says the same of a stuck entrega', async () => {

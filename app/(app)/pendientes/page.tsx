@@ -34,7 +34,8 @@ function Tarjeta({ problema, ahora, esAdmin }: { problema: Problema; ahora: Date
       <h2>{problema.barcoNombre}</h2>
       <p>{quienYCuando}</p>
       {problema.entrega ? (
-        // An entrega has no tracking numbers to list: it says how many packages it covers and who received them.
+        // How many packages an entrega covers (those without number too) and who received them. The ones with a number
+        // are listed below, like those of a recepción, when the entrega kept them.
         <p>
           {[textoDePaquetes(problema.entrega.paquetes), problema.entrega.receptorNombre ? `recibió ${problema.entrega.receptorNombre}` : null]
             .filter(Boolean)

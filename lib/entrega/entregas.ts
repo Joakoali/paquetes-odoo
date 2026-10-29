@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, ne } from 'drizzle-orm'
 import { db } from '../../db/client'
-import { barcosCache, sesionesEscaneo, type Almacen, type SesionEscaneo } from '../../db/schema'
+import { barcosCache, sesionesEscaneo, type Almacen, type PaqueteEntregado, type SesionEscaneo } from '../../db/schema'
 import { registrarAuditoria } from '../audit'
 import { etiquetasDeBarcos } from '../cache/barcos'
 import { ConfiguracionError } from '../errores'
@@ -115,7 +115,8 @@ const PREFIJO_DATA_URL = /^data:[^,]*;base64,/i
  *
  * It is saved straight as `confirmada_pendiente_sync`: an entrega has no earlier stage, since what the phone
  * sends is what the crew confirmed. The name is trimmed, and the signature is stored as bare base64, which is
- * what Odoo takes.
+ * what Odoo takes. `paquetes` is what those lines are (package, courier, delivery), kept with them so that Pendientes
+ * and the search of a package can tell which packages the entrega handed over.
  *
  * If queuing fails, in either try, the error goes through and the entrega stays as it is. It is not deleted: a
  * repeated try may have found it meanwhile. A retry with the same id queues it; if nobody retries, Pendientes
@@ -128,6 +129,7 @@ export async function registrarEntrega(entrada: {
   barcoOdooId: number
   pickingIds: number[]
   moveLineIds: number[]
+  paquetes: PaqueteEntregado[]
   receptorNombre: string
   firmaBase64: string
 }): Promise<void> {
@@ -143,6 +145,7 @@ export async function registrarEntrega(entrada: {
       estado: 'confirmada_pendiente_sync',
       odooPickingIds: entrada.pickingIds,
       odooMoveLineIds: moveLineIds,
+      paquetesEntrega: entrada.paquetes,
       receptorNombre: entrada.receptorNombre.trim(),
       firmaData: entrada.firmaBase64.trim().replace(PREFIJO_DATA_URL, ''),
       confirmedAt: new Date(),
