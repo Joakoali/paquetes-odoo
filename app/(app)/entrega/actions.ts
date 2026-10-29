@@ -1,7 +1,7 @@
 'use server'
 
 import { refresh, revalidatePath } from 'next/cache'
-import type { Almacen } from '@/db/schema'
+import type { Almacen, PaqueteEntregado } from '@/db/schema'
 import { ejecutarAccion, type ResultadoAccion } from '@/lib/acciones'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
@@ -72,14 +72,14 @@ async function leerPendientes(almacen: Almacen, barcoOdooId: number): Promise<Li
 }
 
 /**
- * The lines of the request that can be delivered, and the deliveries they are on: those that Odoo has waiting for the barco
- * in the almacén, and that no other entrega on its way to Odoo has taken. The entrega being confirmed is left out of
- * that second check, so that a retry of it is not blocked by its own lines.
+ * The lines of the request that can be delivered, the deliveries they are on and the packages they are: those that Odoo
+ * has waiting for the barco in the almacén, and that no other entrega on its way to Odoo has taken. The entrega being
+ * confirmed is left out of that second check, so that a retry of it is not blocked by its own lines.
  */
 async function lineasAceptadas(
   almacen: Almacen,
   entrada: { id: string; barcoOdooId: number; moveLineIds: number[] },
-): Promise<{ moveLineIds: number[]; pickingIds: number[] }> {
+): Promise<{ moveLineIds: number[]; pickingIds: number[]; paquetes: PaqueteEntregado[] }> {
   const [pendientes, retenidas] = await Promise.all([
     leerPendientes(almacen, entrada.barcoOdooId),
     moveLineIdsRetenidas({ almacenId: almacen.id, barcoOdooId: entrada.barcoOdooId, exceptoId: entrada.id }),
@@ -110,7 +110,7 @@ export async function confirmarEntregaAction(entrada: {
 
     // A retry finds its entrega saved: nothing of what it sends is used, so nothing of it is given to the domain.
     const lineas = await entregaGuardada(entrada.id, almacen.id)
-      ? { moveLineIds: [], pickingIds: [] }
+      ? { moveLineIds: [], pickingIds: [], paquetes: [] }
       : await lineasAceptadas(almacen, entrada)
 
     // Field by field: the operario and the almacén are the ones of the session, whatever else the client sent along.
@@ -121,6 +121,7 @@ export async function confirmarEntregaAction(entrada: {
       barcoOdooId: entrada.barcoOdooId,
       pickingIds: lineas.pickingIds,
       moveLineIds: lineas.moveLineIds,
+      paquetes: lineas.paquetes,
       receptorNombre,
       firmaBase64: entrada.firmaDataUrl,
     })

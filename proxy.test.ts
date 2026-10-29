@@ -8,6 +8,7 @@ const PANTALLAS = [
   '/recepcion', '/recepcion/7b1e4a52-1f0c-4c55-9a1e-2f3c4d5e6f70',
   '/entrega', '/entrega/673',
   '/pendientes',
+  '/buscar', '/buscar?q=0588',
 ]
 
 describe('the matcher of the proxy', () => {

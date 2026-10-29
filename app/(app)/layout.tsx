@@ -30,6 +30,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
     { href: '/recepcion', label: 'Recepción' },
     { href: '/entrega', label: 'Entrega' },
     { href: '/pendientes', label: 'Pendientes', badge: pendientes },
+    { href: '/buscar', label: 'Buscar' },
   ]
   if (operario.rol === 'admin') tabs.push({ href: '/admin', label: 'Admin' })
 

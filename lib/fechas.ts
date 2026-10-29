@@ -66,6 +66,18 @@ export function inicioDeHoy(ahora: Date): Date {
   return new Date(medianoche - desfaseDeLaZona(new Date(primeraEstimacion)))
 }
 
+const dosCifras = (numero: number) => String(numero).padStart(2, '0')
+
+/**
+ * The day and the time of `instante` on the clock of ZONA_HORARIA, as "28/10 10:32", with the year when it is not the one
+ * of `ahora` ("28/10/2025 10:32"). For what a search finds, which can be from any day: "hace 40 días" says less than a date.
+ */
+export function fechaYHora(instante: Date, ahora: Date): string {
+  const { anio, mes, dia, hora, minuto } = relojDeLaZona(instante)
+  const fecha = `${dosCifras(dia)}/${dosCifras(mes)}${anio === relojDeLaZona(ahora).anio ? '' : `/${anio}`}`
+  return `${fecha} ${dosCifras(hora)}:${dosCifras(minuto)}`
+}
+
 /**
  * How long ago `desde` was, in the words the screens use: "recién", "hace 5 min", "hace 3 h",
  * "ayer" (24 to 48 hours) or "hace 3 días". Elapsed time, not calendar days: 26 hours ago is

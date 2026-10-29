@@ -10,6 +10,7 @@ import { separarRetenidas } from '@/lib/entrega/lineas'
 import { ConfiguracionError, ErrorParaOperario } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { contarSinEnviarPorBarco } from '@/lib/recepcion/recepciones'
+import { valorDeLaDireccion } from '@/lib/ui/busqueda-tracking'
 import { mensajeDeLecturaFallida } from '@/lib/ui/lectura-fallida'
 import { EntregaFlow } from './EntregaFlow'
 
@@ -57,13 +58,18 @@ async function leerEntrega(
  * Steps 2 and 3 of the delivery, on the phone: the packages Odoo has waiting for the barco in the almacén the operario is
  * working in (a live reading of Odoo), the choice of which to hand over, and the name and signature of the crew. The name
  * of the barco is the one of the cache, or, for one the cache does not know, the placeholder the list of barcos uses.
+ * `q` is what the list of packages opens filtered by: the search of a package leads here with it.
  */
-export default async function EntregaBarcoPage({ params }: { params: Promise<{ barcoOdooId: string }> }) {
+export default async function EntregaBarcoPage({ params, searchParams }: {
+  params: Promise<{ barcoOdooId: string }>
+  searchParams: Promise<{ q?: string | string[] }>
+}) {
   // The layout sends whoever has no valid session to the login, but it does not render again when the operario
   // moves from one tab to another: this is the check that does when the session expired meanwhile.
   const operario = await requireOperarioFromCookies().catch(() => redirect('/login'))
   const barcoOdooId = idDeLaDireccion((await params).barcoOdooId)
   if (barcoOdooId === null) notFound()
+  const filtro = valorDeLaDireccion((await searchParams).q)
 
   let almacen: Almacen
   try {
@@ -122,6 +128,7 @@ export default async function EntregaBarcoPage({ params }: { params: Promise<{ b
         lineas={lectura.lineas}
         sinEnviar={lectura.sinEnviar}
         enviandose={lectura.enviandose}
+        filtroInicial={filtro}
       />
     </main>
   )

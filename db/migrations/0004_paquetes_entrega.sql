@@ -1,0 +1,1 @@
+ALTER TABLE "sesiones_escaneo" ADD COLUMN "paquetes_entrega" jsonb;

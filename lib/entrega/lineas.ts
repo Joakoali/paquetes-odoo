@@ -1,3 +1,4 @@
+import type { PaqueteEntregado } from '../../db/schema'
 import { ErrorParaOperario } from '../errores'
 // Type only: lib/odoo/pickings.ts reaches Odoo.
 import type { LineaEntrega } from '../odoo/pickings'
@@ -27,9 +28,10 @@ export function separarRetenidas(
 }
 
 /**
- * The lines of `pendientes` that `pedidas` names, in the order `pendientes` has them (that of Odoo), and the deliveries
- * they are on, each once. `pedidas` is what the phone sent, so it can be anything: one id that is not a line of
- * `pendientes`, or that is one `retenidas` holds, makes the whole request fail, and nothing is partly accepted.
+ * The lines of `pendientes` that `pedidas` names, in the order `pendientes` has them (that of Odoo), the deliveries they
+ * are on, each once, and what each of those lines is (its package, courier and delivery), which the entrega keeps.
+ * `pedidas` is what the phone sent, so it can be anything: one id that is not a line of `pendientes`, or that is one
+ * `retenidas` holds, makes the whole request fail, and nothing is partly accepted.
  *
  * It does not say that something has to be asked for: an empty request gives an empty answer, and it is for the caller
  * to tell the operario that there is nothing to deliver.
@@ -38,7 +40,7 @@ export function resolverElegidas(entrada: {
   pedidas: unknown
   pendientes: readonly LineaEntrega[]
   retenidas: ReadonlySet<number>
-}): { moveLineIds: number[]; pickingIds: number[] } {
+}): { moveLineIds: number[]; pickingIds: number[]; paquetes: PaqueteEntregado[] } {
   const { pedidas, pendientes, retenidas } = entrada
   if (!Array.isArray(pedidas)) throw new ErrorParaOperario(PAQUETES_YA_NO_PENDIENTES)
 
@@ -51,5 +53,6 @@ export function resolverElegidas(entrada: {
   return {
     moveLineIds: elegidas.map((linea) => linea.moveLineId),
     pickingIds: [...new Set(elegidas.map((linea) => linea.pickingId))],
+    paquetes: elegidas.map(({ trackingNumber, courierNombre, pickingRef }) => ({ trackingNumber, courierNombre, pickingRef })),
   }
 }

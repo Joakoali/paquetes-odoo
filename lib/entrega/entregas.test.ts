@@ -220,11 +220,19 @@ function entradaDeEntrega(datos: Partial<Parameters<typeof registrarEntrega>[0]>
     barcoOdooId: 673,
     pickingIds: [700, 701],
     moveLineIds: [1, 2, 5],
+    paquetes: PAQUETES,
     receptorNombre: 'Capitán Pérez',
     firmaBase64: 'data:image/png;base64,AAA',
     ...datos,
   }
 }
+
+/** What the three lines of `entradaDeEntrega` are, one of them without number. */
+const PAQUETES = [
+  { trackingNumber: 'JJD000390007840588', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
+  { trackingNumber: '1Z999AA10123456784', courierNombre: 'UPS', pickingRef: 'MB92/OUT/00700' },
+  { trackingNumber: null, courierNombre: 'UPS (incorrecto)', pickingRef: 'MB92/OUT/00701' },
+]
 
 describe('registrarEntrega', () => {
   it('is idempotent by id: a retry after a dropped connection publishes once, once the worker has synced it', async () => {
@@ -378,12 +386,22 @@ describe('registrarEntrega', () => {
       barcoOdooId: 673,
       odooPickingIds: [700, 701],
       odooMoveLineIds: [1, 2, 5],
+      paquetesEntrega: PAQUETES,
       intentos: 0,
       ultimoError: null,
       ultimoErrorTipo: null,
       syncedAt: null,
     })
     expect(Math.abs((fila.confirmedAt as Date).getTime() - Date.now())).toBeLessThan(5_000)
+  })
+
+  it('keeps the packages the first try saved when a retry comes with none: a retry sends nothing to be used', async () => {
+    const entrada = entradaDeEntrega()
+
+    await registrarEntrega(entrada)
+    await registrarEntrega({ ...entrada, pickingIds: [], moveLineIds: [], paquetes: [] })
+
+    expect((await filaSesion(entrada.id)).paquetesEntrega).toEqual(PAQUETES)
   })
 
   it('queues the entrega once it is saved, and audits it', async () => {

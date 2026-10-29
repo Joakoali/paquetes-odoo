@@ -246,7 +246,12 @@ export function RecepcionHome({ abiertas, enviadas, couriers, ahora }: {
 
   return (
     <>
-      <BarcoSearch placeholder="Buscar barco para empezar una recepción…" onElegir={abrirBarco} deshabilitado={ocupado} />
+      <BarcoSearch
+        placeholder="Buscar barco para empezar una recepción…"
+        onElegir={abrirBarco}
+        deshabilitado={ocupado}
+        buscarComoTracking
+      />
 
       <div role="status">
         {respuesta ? (

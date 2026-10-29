@@ -3,10 +3,12 @@
 import { useEffect, useReducer, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { CourierPicker } from '@/components/courier-picker'
+import { FiltroTracking } from '@/components/filtro-tracking'
 import { ScanInput, type ScanInputHandle } from '@/components/scan-input'
 // Types only: these modules reach the database, which must not get into the client.
 import type { CourierOpcion } from '@/lib/recepcion/couriers'
 import type { RecepcionDetalle } from '@/lib/recepcion/recepciones'
+import { filtrarPorTracking } from '@/lib/ui/busqueda-tracking'
 import {
   claveNueva, colaReducer, contarFilas, filasIniciales, rotuloDeLaLista, textoDePaquetes, type FilaEscaneo,
 } from '@/lib/ui/cola-escaneo'
@@ -79,10 +81,19 @@ function FilaDePaquete({ fila, ocupado, onBorrar }: {
  * is not sent (`salida-recepcion`): it is refused with the warning sound and a strip that names it, and the screen
  * does not go away while a refused code has not been seen: it says which were not saved and how to go back to scan
  * them again.
+ *
+ * The filter by tracking number is a field of its own, so the gun types into it while it has the focus, as it does into
+ * the filter of the couriers: its Enter (the gun's, or the operario's when done) gives the focus back to the scan field,
+ * and a code that ends up there only filters the list, with no "agregado" and no sound. A scan into the scan field
+ * clears the filter, so that the row it makes is always in view. It is there from the first package and not from a
+ * length, as the other lists have it: the list grows while scanning, and a field showing up halfway through a burst of
+ * the gun would make what is below it jump.
  */
-export function RecepcionBarco({ recepcion, couriers }: {
+export function RecepcionBarco({ recepcion, couriers, filtroInicial }: {
   recepcion: RecepcionDetalle
   couriers: { frecuentes: CourierOpcion[]; todos: CourierOpcion[] }
+  /** What the list opens filtered by: the `q` of the address, which is how the search of a package leads here. */
+  filtroInicial: string
 }) {
   const router = useRouter()
   const scan = useRef<ScanInputHandle>(null)
@@ -100,9 +111,11 @@ export function RecepcionBarco({ recepcion, couriers }: {
   const salida = useRef(RECEPCION_ABIERTA)
   // The codes refused while the recepción closed, once it did: the screen is held with them in view until the operario goes.
   const [sinGuardar, setSinGuardar] = useState<string[] | null>(null)
+  const [filtro, setFiltro] = useState(filtroInicial)
 
   const ocupado = ejecutando || saliendo || sinGuardar !== null
   const conteo = contarFilas(filas)
+  const visibles = filtrarPorTracking(filas, filtro)
   const elegido = couriers.todos.find((courier) => courier.id === elegidoId) ?? null
 
   useEffect(() => prepararSonidos(), [])
@@ -142,6 +155,8 @@ export function RecepcionBarco({ recepcion, couriers }: {
     }
 
     const clave = claveNueva()
+    // The row the code makes goes on top of the list, and a filter that left it out would hide it.
+    setFiltro('')
     dispatch({ tipo: 'escaneado', clave, trackingNumber: codigo, courierId: elegido.id, courierNombre: elegido.nombre })
 
     const resultado = await llamarAccion(() => escanearAction({
@@ -275,17 +290,26 @@ export function RecepcionBarco({ recepcion, couriers }: {
         ) : null}
       </div>
 
-      <section aria-labelledby="paquetes-rotulo">
+      <section className="inicio-seccion" aria-labelledby="paquetes-rotulo">
         <p className="label" id="paquetes-rotulo">{rotuloDeLaLista(conteo)}</p>
+        {filas.length > 0 || filtroInicial !== '' ? (
+          <FiltroTracking
+            valor={filtro}
+            onCambiar={setFiltro}
+            visibles={visibles.length}
+            total={filas.length}
+            onTerminar={() => scan.current?.enfocar()}
+          />
+        ) : null}
         {filas.length === 0 ? (
           <p className="lista-vacia">Todavía no escaneaste ningún paquete.</p>
-        ) : (
+        ) : visibles.length > 0 ? (
           <ul className="list paquetes-lista">
-            {filas.map((fila) => (
+            {visibles.map((fila) => (
               <FilaDePaquete key={fila.clave} fila={fila} ocupado={ocupado} onBorrar={borrar} />
             ))}
           </ul>
-        )}
+        ) : null}
       </section>
 
       <div className="actions recepcion-acciones">

@@ -571,6 +571,29 @@ details[open] > summary::before {
   position: relative;
 }
 
+/*
+ * Five tabs (the admin's) share a phone's bar only in a smaller type, and with a smaller number on Pendientes: each tab
+ * gets a fifth of the bar, and that number, which sits beside its label, must not cover the label of the next one (it
+ * leaves 6px at 360px wide). Counted by a quantity query (the first tab is also the fifth from the end, or further),
+ * which every browser of the devices understands. Only on a phone: from 768px the tabs are up in the bar.
+ */
+@media (max-width: 767px) {
+  .shell-tabs-list > li:first-child:nth-last-child(n + 5) .shell-tab,
+  .shell-tabs-list > li:first-child:nth-last-child(n + 5) ~ li .shell-tab {
+    font-size: 0.6875rem;
+  }
+
+  .shell-tabs-list > li:first-child:nth-last-child(n + 5) .shell-tab-badge,
+  .shell-tabs-list > li:first-child:nth-last-child(n + 5) ~ li .shell-tab-badge {
+    min-width: 1rem;
+    height: 1rem;
+    margin-left: 0;
+    padding: 0 0.2rem;
+    font-size: 0.625rem;
+    line-height: 1rem;
+  }
+}
+
 /* Over the corner of the label, so that it does not take room from the other tabs. */
 .shell-tab-badge {
   position: absolute;
@@ -658,7 +681,7 @@ details[open] > summary::before {
     padding: 0.5rem 1rem;
   }
 
-  /* It can shrink, and what gives is the name (it is cut with "…"): four tabs and this fit a 768px screen only just. */
+  /* It can shrink, and what gives is the name (it is cut with "…"): the admin's five tabs and this fit a 768px screen only just. */
   .shell-who {
     flex: 0 1 auto;
     margin-left: auto;
@@ -668,8 +691,10 @@ details[open] > summary::before {
     padding-bottom: 0;
   }
 
+  /* The tabs keep their width: what gives when the bar is short is the name of the operario. */
   .shell-tabs {
     position: static;
+    flex: none;
     padding-bottom: 0;
     border-top: 0;
     background: transparent;
@@ -688,6 +713,12 @@ details[open] > summary::before {
     padding: 0 1rem;
     border-radius: 10px;
     font-size: 1rem;
+  }
+
+  /* Five tabs and the rest of the bar fit a 768px screen with less room around each label. */
+  .shell-tabs-list > li:first-child:nth-last-child(n + 5) .shell-tab,
+  .shell-tabs-list > li:first-child:nth-last-child(n + 5) ~ li .shell-tab {
+    padding: 0 0.625rem;
   }
 
   /* The dark pill says it. The weight stays, so that the tabs do not change width (and move) from one page to the next. */
@@ -1085,6 +1116,33 @@ details[open] > summary::before {
 }
 
 /*
+ * The filter of a list by tracking number: the field and, under it, how many rows it leaves and "Quitar filtro". The line
+ * under the field is there even while it says nothing, as the place of a message read aloud has to be.
+ */
+.filtro-tracking > * + * {
+  margin-top: 0.25rem;
+}
+
+.filtro-tracking-estado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 0.75rem;
+}
+
+/* The way to take it away sits at the right end of the line, with its edge where the field's is. */
+.filtro-tracking-estado .btn-link {
+  margin-right: -0.75rem;
+}
+
+/* A field that helps to read a list, lighter than the one the screen is for (the scan field, the search) until it is used. */
+.filtro-tracking .input:not(:focus) {
+  border-width: 1.5px;
+  border-color: var(--border-strong);
+}
+
+/*
  * "¿Para qué barco es?": over everything (the almacén error of the bar is 40). It starts at the top, not in the middle:
  * with the on-screen keyboard open there is little room below, and the field is the first thing on it.
  */
@@ -1323,6 +1381,85 @@ details[open] > summary::before {
   position: absolute;
   top: 0;
   right: 0;
+}
+
+/* ------------------------------------------------------------------ Buscar */
+
+/* The field and its button on one line: the field takes what the button leaves. */
+.busqueda-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.busqueda-form .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A package found: its number and courier, and under it the places it has been in. */
+.busqueda-paquete-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+}
+
+.busqueda-paquete-codigo {
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+/*
+ * The places, one under the other with a line between them, the last one (where the package is now) in bold. The way in
+ * goes beside its text, or under it, on the right, when the two do not fit side by side.
+ */
+.busqueda-lugar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 0.75rem;
+  padding: 0.375rem 0;
+}
+
+.busqueda-lugar > .fila-texto {
+  flex: 1 1 13rem;
+}
+
+.busqueda-lugar + .busqueda-lugar {
+  border-top: 1px solid var(--border);
+}
+
+.busqueda-lugar-titulo {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.busqueda-lugar:last-child .busqueda-lugar-titulo {
+  font-weight: 800;
+}
+
+.busqueda-lugar-ok {
+  color: var(--primary);
+}
+
+.busqueda-lugar-en_curso {
+  color: var(--warn);
+}
+
+.busqueda-lugar-problema {
+  color: var(--danger);
+}
+
+/* The way in, at the right end of its place. */
+.busqueda-lugar-enlace {
+  flex: none;
+  margin-left: auto;
+  margin-right: -0.75rem;
+}
+
+/* What a search of barcos offers when no barco is called what was typed. */
+.buscar-como-tracking {
+  padding-left: 0;
 }
 
 /* ------------------------------------------------------------------- Admin */

@@ -553,7 +553,8 @@ export interface RecepcionEnviada {
 
 const ESTADOS_ENVIADA: SesionEscaneo['estado'][] = ['confirmada_pendiente_sync', 'sincronizada', 'error']
 
-function estadoDeEnvio(estado: SesionEscaneo['estado'], ultimoError: string | null): RecepcionEnviada['estado'] {
+/** How the sync of a recepción that was sent is going: what Enviadas hoy says of it, and the search of a package too. */
+export function estadoDeEnvio(estado: SesionEscaneo['estado'], ultimoError: string | null): RecepcionEnviada['estado'] {
   if (estado === 'confirmada_pendiente_sync') return 'enviando'
   // A recepción can sync and still leave a note in `ultimoError` (everything in it was a duplicate).
   return estado === 'sincronizada' && !ultimoError ? 'ok' : 'problema'

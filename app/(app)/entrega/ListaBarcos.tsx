@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
+import { BuscarComoTracking } from '@/components/buscar-como-tracking'
 // Type only: lib/entrega/entregas.ts reaches the database, which must not get into the client.
 import type { BarcoParaEntregar } from '@/lib/entrega/entregas'
 import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
@@ -34,6 +35,9 @@ function FilaDeBarco({ barco, ahora }: { barco: BarcoParaEntregar; ahora: Date }
  * Step 1 of the delivery: the barcos that have packages waiting in the almacén, and a field that filters that list as it
  * is typed in (it is already on the screen, so it asks nothing of the server). `ahora` comes from the server, so that
  * what the times say is the same in the HTML and after it is hydrated.
+ *
+ * What no barco is called may be a tracking number (an operario with a package in hand, looking for its barco): then the
+ * field offers to search it as one, which is where a package is found.
  */
 export function ListaBarcos({ barcos, almacenPrefijo, ahora }: {
   barcos: BarcoParaEntregar[]
@@ -68,7 +72,10 @@ export function ListaBarcos({ barcos, almacenPrefijo, ahora }: {
       </h2>
 
       {visibles.length === 0 ? (
-        <p className="busqueda-estado" role="status">Ningún barco de la lista se llama así.</p>
+        <>
+          <p className="busqueda-estado" role="status">Ningún barco de la lista se llama así.</p>
+          <BuscarComoTracking escrito={texto} />
+        </>
       ) : (
         <ul className="list">
           {visibles.map((barco) => <FilaDeBarco key={barco.barcoOdooId} barco={barco} ahora={ahora} />)}

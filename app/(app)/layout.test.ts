@@ -68,13 +68,14 @@ describe('(app) layout', () => {
   })
 
   describe('the tabs', () => {
-    it('are Recepción, Entrega and Pendientes for an operario, and no Admin', async () => {
+    it('are Recepción, Entrega, Pendientes and Buscar for an operario, and no Admin', async () => {
       const { tabs } = (await elShell()).props
 
       expect(tabs.map((tab) => [tab.href, tab.label])).toEqual([
         ['/recepcion', 'Recepción'],
         ['/entrega', 'Entrega'],
         ['/pendientes', 'Pendientes'],
+        ['/buscar', 'Buscar'],
       ])
     })
 
@@ -87,6 +88,7 @@ describe('(app) layout', () => {
         ['/recepcion', 'Recepción'],
         ['/entrega', 'Entrega'],
         ['/pendientes', 'Pendientes'],
+        ['/buscar', 'Buscar'],
         ['/admin', 'Admin'],
       ])
     })
@@ -100,6 +102,7 @@ describe('(app) layout', () => {
         ['Recepción', undefined],
         ['Entrega', undefined],
         ['Pendientes', 4],
+        ['Buscar', undefined],
       ])
     })
 
@@ -130,7 +133,7 @@ describe('(app) layout', () => {
       const { tabs } = (await elShell()).props
 
       expect(tabs.find((tab) => tab.label === 'Pendientes')?.badge).toBeUndefined()
-      expect(tabs).toHaveLength(3)
+      expect(tabs).toHaveLength(4)
       // It is not hidden either: somebody reading the logs finds why.
       expect(consola).toHaveBeenCalledTimes(1)
     })

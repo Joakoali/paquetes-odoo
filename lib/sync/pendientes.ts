@@ -2,7 +2,7 @@ import { and, asc, count, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
   almacenes, barcosCache, operarios, sesionCourierBatches, sesionItems, sesionesEscaneo,
-  type ErrorTipo, type Operario, type SesionEscaneo,
+  type ErrorTipo, type Operario, type PaqueteEntregado, type SesionEscaneo,
 } from '../../db/schema'
 import { getAlmacenesForOperario } from '../admin/operarioAlmacenes'
 import { registrarAuditoria } from '../audit'
@@ -39,15 +39,16 @@ export interface Problema {
   /** When it was sent: what "hace 3 h" counts from. */
   fecha: Date
   /**
-   * The packages the problem is about, in the order they were scanned, each with the picking where Odoo already
-   * had it (`ref`) when it did. For an `error` or a `trabado` they are all the recepción's, since the whole
-   * recepción is what failed; for a `duplicado`, only those left out. An entrega has none of its own: it is
-   * described by `entrega`.
+   * The packages the problem is about, each with the picking where Odoo already had it (`ref`) when it did. For a
+   * recepción, in the order they were scanned: for an `error` or a `trabado` they are all of them, since the whole
+   * recepción is what failed; for a `duplicado`, only those left out. For an entrega, the packages it handed over
+   * that have a number, in the order Odoo listed them, with no `ref`; none for one confirmed before the entregas kept
+   * them (`entrega` still says how many it covers).
    */
   paquetes: Array<{ trackingNumber: string; ref: string | null }>
   /**
-   * What an entrega says of the packages it covers, since it has no tracking numbers to list: how many the crew
-   * was given and the name of who received them. Null for a recepción.
+   * What an entrega says of the packages it covers: how many the crew was given (those without number too) and the
+   * name of who received them. Null for a recepción.
    */
   entrega: { paquetes: number; receptorNombre: string | null } | null
   /** What happened and what to do, in words for the operator. */
@@ -159,6 +160,11 @@ async function paquetesDeLasSesiones(sesionIds: string[]): Promise<Map<string, P
   return porSesion
 }
 
+/** The packages an entrega handed over that have a number to list; none for one confirmed before they were kept. */
+function paquetesConNumero(paquetes: PaqueteEntregado[] | null): Problema['paquetes'] {
+  return (paquetes ?? []).flatMap(({ trackingNumber }) => (trackingNumber === null ? [] : [{ trackingNumber, ref: null }]))
+}
+
 const ORDEN_DE_TIPOS: Record<TipoProblema, number> = { error: 0, trabado: 1, duplicado: 2 }
 
 /** The failures first, then the stuck sends, then the duplicados; the oldest first in each group, and by id when the moment is the same. */
@@ -182,6 +188,7 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
     confirmedAt: sesionesEscaneo.confirmedAt,
     createdAt: sesionesEscaneo.createdAt,
     odooMoveLineIds: sesionesEscaneo.odooMoveLineIds,
+    paquetesEntrega: sesionesEscaneo.paquetesEntrega,
     receptorNombre: sesionesEscaneo.receptorNombre,
     barcoOdooId: sesionesEscaneo.barcoOdooId,
     barcoNombre: barcosCache.nombre,
@@ -209,8 +216,10 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
       operarioNombre: sesion.operarioNombre,
       // Every sesión that gets here was confirmed; `createdAt` only keeps the type honest.
       fecha: sesion.confirmedAt ?? sesion.createdAt,
-      paquetes: (tipo === 'duplicado' ? suyos.filter((paquete) => paquete.dejadoAfueraAlEnviar) : suyos)
-        .map(({ trackingNumber, ref }) => ({ trackingNumber, ref })),
+      paquetes: sesion.tipo === 'entrega'
+        ? paquetesConNumero(sesion.paquetesEntrega)
+        : (tipo === 'duplicado' ? suyos.filter((paquete) => paquete.dejadoAfueraAlEnviar) : suyos)
+            .map(({ trackingNumber, ref }) => ({ trackingNumber, ref })),
       entrega: sesion.tipo === 'entrega'
         ? { paquetes: sesion.odooMoveLineIds?.length ?? 0, receptorNombre: sesion.receptorNombre }
         : null,
