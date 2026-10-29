@@ -353,13 +353,23 @@ describe('escanearPaquete', () => {
     await expect(escanear(sesionId, 'JJD1')).rejects.toThrow(RecepcionCerradaError) // a closed recepción, though the code is in it
   })
 
-  it('does not ask the Odoo cache about a code it already has', async () => {
+  it('asks the Odoo cache together with the rest, also about a code it already has, and still writes nothing', async () => {
+    // The reads of a scan go at once: one round trip instead of one after the other.
     await escanear(sesionId, 'JJD1')
     vi.mocked(buscarDuplicado).mockClear()
 
-    await escanear(sesionId, 'JJD1')
+    expect(await escanear(sesionId, 'JJD1')).toEqual({ tipo: 'repetido', trackingNumber: 'JJD1', donde: 'esta recepción' })
 
-    expect(buscarDuplicado).not.toHaveBeenCalled()
+    expect(buscarDuplicado).toHaveBeenCalledWith('JJD1')
+    expect(await guardados(sesionId)).toHaveLength(1)
+  })
+
+  it('writes nothing for a courier id that names no courier', async () => {
+    await expect(escanearPaquete({ sesionId, courierId: 999_999, trackingNumber: 'JJD1', operarioId: veronika.id }))
+      .rejects.toThrow('No courier has the id 999999')
+
+    expect(await db.select().from(sesionCourierBatches)).toEqual([])
+    expect(await db.select().from(sesionItems)).toEqual([])
   })
 
   it('takes both codes when two operarios scan different codes under a new courier at the same time', async () => {
@@ -559,7 +569,7 @@ describe('descartarRecepcion', () => {
     await descartarRecepcion({ sesionId, operarioId: veronika.id })
 
     expect(batch).toHaveBeenCalledOnce()
-    expect(batch.mock.calls[0][0]).toHaveLength(3) // packages, batches, recepción
+    expect(batch.mock.calls[0][0]).toHaveLength(4) // the lock on the recepción, then packages, batches, recepción
   })
 
   it('leaves a recepción alone when it is sent after it was checked and before it is deleted', async () => {
