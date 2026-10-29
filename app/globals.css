@@ -1085,6 +1085,27 @@ details[open] > summary::before {
 }
 
 /*
+ * The filter of a list by tracking number: the field and, under it, how many rows it leaves and "Quitar filtro". The line
+ * under the field is there even while it says nothing, as the place of a message read aloud has to be.
+ */
+.filtro-tracking > * + * {
+  margin-top: 0.25rem;
+}
+
+.filtro-tracking-estado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 0.75rem;
+}
+
+/* The way to take it away sits at the right end of the line, with its edge where the field's is. */
+.filtro-tracking-estado .btn-link {
+  margin-right: -0.75rem;
+}
+
+/*
  * "¿Para qué barco es?": over everything (the almacén error of the bar is 40). It starts at the top, not in the middle:
  * with the on-screen keyboard open there is little room below, and the field is the first thing on it.
  */

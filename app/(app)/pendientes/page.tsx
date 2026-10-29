@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation'
+import { ListaFiltrable } from '@/components/lista-filtrable'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { haceCuanto } from '@/lib/fechas'
+import { valorDeLaDireccion } from '@/lib/ui/busqueda-tracking'
 import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
 import { alcanceDelOperario, listarProblemas, type Problema, type TipoProblema } from '@/lib/sync/pendientes'
 import { marcarRevisadoAction, reintentarAction } from './actions'
@@ -83,10 +85,15 @@ function Tarjeta({ problema, ahora, esAdmin }: { problema: Problema; ahora: Date
   )
 }
 
-export default async function PendientesPage() {
+/**
+ * The problems the operario can look at, the cards drawn here and filtered in the browser by the tracking numbers of their
+ * packages. `q` is what the list opens filtered by: the search of a package leads here with it.
+ */
+export default async function PendientesPage({ searchParams }: { searchParams: Promise<{ q?: string | string[] }> }) {
   // The layout sends whoever has no valid session to the login, but it does not render again when the operario
   // moves from one tab to another: this is the check that does when the session expired meanwhile.
   const operario = await requireOperarioFromCookies().catch(() => redirect('/login'))
+  const filtro = valorDeLaDireccion((await searchParams).q)
   const ahora = new Date()
   const problemas = await listarProblemas(await alcanceDelOperario(operario), ahora)
 
@@ -96,11 +103,14 @@ export default async function PendientesPage() {
       {problemas.length === 0 ? (
         <p>No hay nada pendiente.</p>
       ) : (
-        <ul>
-          {problemas.map((problema) => (
-            <Tarjeta key={problema.sesionId} problema={problema} ahora={ahora} esAdmin={operario.rol === 'admin'} />
-          ))}
-        </ul>
+        <ListaFiltrable
+          filtroInicial={filtro}
+          elementos={problemas.map((problema) => ({
+            clave: problema.sesionId,
+            trackingNumbers: problema.paquetes.map((paquete) => paquete.trackingNumber),
+            contenido: <Tarjeta problema={problema} ahora={ahora} esAdmin={operario.rol === 'admin'} />,
+          }))}
+        />
       )}
     </main>
   )

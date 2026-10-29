@@ -11,6 +11,7 @@ import { redirect } from 'next/navigation'
 import type { Operario } from '@/db/schema'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { UnauthorizedError } from '@/lib/auth/guards'
+import { ListaFiltrable, type ElementoFiltrable } from '@/components/lista-filtrable'
 import { alcanceDelOperario, listarProblemas, type Problema } from '@/lib/sync/pendientes'
 import { marcarRevisadoAction, reintentarAction } from './actions'
 import { AccionProblema } from './AccionProblema'
@@ -56,10 +57,13 @@ function problema(datos: Partial<Problema> = {}): Problema {
   }
 }
 
+/** The page, with the `q` of its address if it has one. Next hands it as a promise. */
+const pagina = (q?: string) => PendientesPage({ searchParams: Promise.resolve(q === undefined ? {} : { q }) })
+
 /** The page as the browser will be given it, as HTML. */
 async function html(...problemas: Problema[]): Promise<string> {
   vi.mocked(listarProblemas).mockResolvedValue(problemas)
-  return renderToStaticMarkup(await PendientesPage())
+  return renderToStaticMarkup(await pagina())
 }
 
 type Elemento = ReactElement<Record<string, unknown>>
@@ -73,6 +77,8 @@ function elementos(nodo: ReactNode): Elemento[] {
   if (Array.isArray(nodo)) return nodo.flatMap(elementos)
   if (!isValidElement<Record<string, unknown>>(nodo)) return []
   if (nodo.type === AccionProblema) return [nodo]
+  // The list keeps state too (its filter): what is looked at is the cards the page hands it.
+  if (nodo.type === ListaFiltrable) return (nodo.props.elementos as ElementoFiltrable[]).flatMap((elemento) => elementos(elemento.contenido))
   if (typeof nodo.type === 'function') return elementos((nodo.type as (props: unknown) => ReactNode)(nodo.props))
   return [nodo, ...elementos(nodo.props.children as ReactNode)]
 }
@@ -80,7 +86,7 @@ function elementos(nodo: ReactNode): Elemento[] {
 /** The buttons of the page, in order: each with its text, the action it runs, the sesión it runs it on and its look. */
 async function botones(...problemas: Problema[]) {
   vi.mocked(listarProblemas).mockResolvedValue(problemas)
-  return elementos(await PendientesPage())
+  return elementos(await pagina())
     .filter((elemento) => elemento.type === AccionProblema)
     .map((boton) => ({
       texto: boton.props.children,
@@ -117,7 +123,7 @@ describe('PendientesPage', () => {
     it('sends whoever has no valid session to the login, without reading anything', async () => {
       vi.mocked(requireOperarioFromCookies).mockRejectedValue(new UnauthorizedError('Invalid or expired session'))
 
-      await expect(PendientesPage()).rejects.toThrow('NEXT_REDIRECT /login')
+      await expect(pagina()).rejects.toThrow('NEXT_REDIRECT /login')
 
       expect(listarProblemas).not.toHaveBeenCalled()
     })
@@ -134,6 +140,52 @@ describe('PendientesPage', () => {
 
   it('does not say there is nothing pending when there is something', async () => {
     expect(await html(problema())).not.toContain('No hay nada pendiente.')
+  })
+
+  describe('the filter by tracking number', () => {
+    const conPaquete = (sesionId: string, trackingNumber: string) =>
+      problema({ sesionId, barcoNombre: `BARCO-${sesionId}`, paquetes: [{ trackingNumber, ref: null }] })
+
+    it('is not there for a few problems, which are read at a glance', async () => {
+      const html5 = await html(...['a', 'b', 'c', 'd', 'e'].map((id) => conPaquete(id, `JJD-${id}`)))
+
+      expect(html5).not.toContain('Filtrar por tracking nº')
+    })
+
+    it('is there from six problems, with every card in view while nothing is typed', async () => {
+      const html6 = await html(...['a', 'b', 'c', 'd', 'e', 'f'].map((id) => conPaquete(id, `JJD-${id}`)))
+
+      expect(html6).toContain('aria-label="Filtrar por tracking nº"')
+      expect(html6.match(/class="card"/g)).toHaveLength(6)
+    })
+
+    it('opens with the q of the address, showing only the problems with a package that has it', async () => {
+      vi.mocked(listarProblemas).mockResolvedValue([conPaquete('a', 'JJD000390007840588'), conPaquete('b', 'XW297134737JF')])
+
+      const pantalla = renderToStaticMarkup(await pagina(' 0588 '))
+
+      expect(pantalla).toContain('BARCO-a')
+      expect(pantalla).not.toContain('BARCO-b')
+      expect(pantalla).toContain('value="0588"')
+      expect(pantalla).toContain('Mostrando 1 de 2')
+    })
+
+    it('says so when no problem has the package, and draws no card', async () => {
+      vi.mocked(listarProblemas).mockResolvedValue([conPaquete('a', 'JJD000390007840588')])
+
+      const pantalla = renderToStaticMarkup(await pagina('9999'))
+
+      expect(pantalla).toContain('Ningún paquete tiene «9999» en el tracking.')
+      expect(pantalla).not.toContain('class="card"')
+      expect(pantalla).not.toContain('No hay nada pendiente.')
+    })
+
+    it('reads the same problems with it: the filter is drawn over them, it asks nothing more', async () => {
+      await pagina('0588')
+
+      expect(listarProblemas).toHaveBeenCalledTimes(1)
+      expect(listarProblemas).toHaveBeenCalledWith({ almacenIds: [1] }, AHORA)
+    })
   })
 
   describe('a card', () => {

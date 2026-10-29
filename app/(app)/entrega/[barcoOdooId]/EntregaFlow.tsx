@@ -3,9 +3,11 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, useTransition } from 'react'
+import { FiltroTracking } from '@/components/filtro-tracking'
 import { SignaturePad } from '@/components/signature-pad'
 // Type only: lib/odoo/pickings.ts reaches Odoo, which must not get into the client.
 import type { LineaEntrega } from '@/lib/odoo/pickings'
+import { filtrarPorTracking, mostrarFiltro } from '@/lib/ui/busqueda-tracking'
 import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
 import {
   alternarLinea, MAX_NOMBRE_RECEPTOR, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEnviandose, textoDeLinea,
@@ -65,8 +67,11 @@ function FilaDeLinea({ linea, elegida, onAlternar }: {
  * while it is sending and after it failed, so that the retry sends exactly what the first try did (the server keeps the
  * entrega it saved the first time, and a name or a signature changed since would look sent when it was not). The button is
  * disabled while a try is on its way: a second touch does not send a second time.
+ *
+ * The filter by tracking number only hides rows. What is chosen, what "Se entregan" counts and what is signed for are all
+ * the lines, the hidden ones included: a package that is filtered out is still handed over if it is chosen.
  */
-export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, sinEnviar, enviandose }: {
+export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, sinEnviar, enviandose, filtroInicial }: {
   barcoOdooId: number
   barcoNombre: string
   almacenPrefijo: string
@@ -75,10 +80,13 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
   sinEnviar: number
   /** The packages Odoo still lists that an entrega already confirmed is taking to Odoo: they are not in `lineas`, so they cannot be handed over twice. */
   enviandose: number
+  /** What the list opens filtered by: the `q` of the address, which is how the search of a package leads here. */
+  filtroInicial: string
 }) {
   const router = useRouter()
   const [paso, setPaso] = useState<Paso>('paquetes')
   const [elegidas, setElegidas] = useState<Set<number>>(() => new Set(lineas.map((linea) => linea.moveLineId)))
+  const [filtro, setFiltro] = useState(filtroInicial)
   const [receptor, setReceptor] = useState('')
   const [firma, setFirma] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -88,6 +96,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
   const [enviando, ejecutar] = useTransition()
 
   const resumen = resumenSeleccion(lineas, elegidas)
+  const visibles = filtrarPorTracking(lineas, filtro)
   // Nothing of what is sent can change while it is sent, nor after it failed and has to be sent again as it was.
   const bloqueado = enviando || error !== null
 
@@ -246,18 +255,23 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       {lineas.length === 0 ? (
         <p className="lista-vacia">{textoSinPaquetes(enviandose)}</p>
       ) : (
-        <section aria-labelledby="paquetes-rotulo">
+        <section className="inicio-seccion" aria-labelledby="paquetes-rotulo">
           <h2 className="label" id="paquetes-rotulo">{textoDeSeleccion(resumen)}</h2>
-          <ul className="list">
-            {lineas.map((linea) => (
-              <FilaDeLinea
-                key={linea.moveLineId}
-                linea={linea}
-                elegida={elegidas.has(linea.moveLineId)}
-                onAlternar={(moveLineId) => setElegidas((actual) => alternarLinea(actual, moveLineId))}
-              />
-            ))}
-          </ul>
+          {mostrarFiltro(lineas.length, filtroInicial) ? (
+            <FiltroTracking valor={filtro} onCambiar={setFiltro} visibles={visibles.length} total={lineas.length} />
+          ) : null}
+          {visibles.length > 0 ? (
+            <ul className="list">
+              {visibles.map((linea) => (
+                <FilaDeLinea
+                  key={linea.moveLineId}
+                  linea={linea}
+                  elegida={elegidas.has(linea.moveLineId)}
+                  onAlternar={(moveLineId) => setElegidas((actual) => alternarLinea(actual, moveLineId))}
+                />
+              ))}
+            </ul>
+          ) : null}
         </section>
       )}
 

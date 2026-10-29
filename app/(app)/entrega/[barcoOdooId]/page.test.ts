@@ -75,8 +75,11 @@ beforeEach(async () => {
   })
 })
 
-/** The page for the id that is in the address bar. Next hands the params as a promise. */
-const pagina = (barcoOdooId = '673') => EntregaBarcoPage({ params: Promise.resolve({ barcoOdooId }) })
+/** The page for the id that is in the address bar, and its `q` if it has one. Next hands both as promises. */
+const pagina = (barcoOdooId = '673', q?: string | string[]) => EntregaBarcoPage({
+  params: Promise.resolve({ barcoOdooId }),
+  searchParams: Promise.resolve(q === undefined ? {} : { q }),
+})
 
 /** The first element of the tree that is of this type, or undefined. */
 function buscar(nodo: ReactNode, tipo: unknown): ReactElement<Record<string, unknown>> | undefined {
@@ -199,7 +202,28 @@ describe('EntregaBarcoPage', () => {
     const flujo = buscar(await pagina(), EntregaFlow)
 
     expect(flujo?.props).toEqual({
-      barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', almacenPrefijo: 'MB92', lineas, sinEnviar: 3, enviandose: 0,
+      barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', almacenPrefijo: 'MB92', lineas, sinEnviar: 3, enviandose: 0, filtroInicial: '',
+    })
+  })
+
+  describe('the q of the address', () => {
+    it('is what the list of packages opens filtered by: the search of a package leads here with it', async () => {
+      const flujo = buscar(await pagina('673', ' 0588 '), EntregaFlow)
+
+      expect(flujo?.props.filtroInicial).toBe('0588')
+    })
+
+    it('is the first one when the address has it twice', async () => {
+      const flujo = buscar(await pagina('673', ['0588', '1234']), EntregaFlow)
+
+      expect(flujo?.props.filtroInicial).toBe('0588')
+    })
+
+    it('reads Odoo the same with it: the filter is drawn over the lines, it asks nothing of Odoo', async () => {
+      await pagina('673', '0588')
+
+      expect(getLineasEntregaPendiente).toHaveBeenCalledTimes(1)
+      expect(getLineasEntregaPendiente).toHaveBeenCalledWith({ outTypeId: 2, barcoOdooId: 673 })
     })
   })
 

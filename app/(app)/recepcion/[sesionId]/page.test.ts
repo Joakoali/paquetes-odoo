@@ -47,8 +47,11 @@ beforeEach(() => {
   })
 })
 
-/** The page for the id that is in the address bar. Next hands the params as a promise. */
-const pagina = (sesionId = SESION) => RecepcionBarcoPage({ params: Promise.resolve({ sesionId }) })
+/** The page for the id that is in the address bar, and its `q` if it has one. Next hands both as promises. */
+const pagina = (sesionId = SESION, q?: string | string[]) => RecepcionBarcoPage({
+  params: Promise.resolve({ sesionId }),
+  searchParams: Promise.resolve(q === undefined ? {} : { q }),
+})
 
 /** The first element of the tree that is of this type, or undefined. */
 function buscar(nodo: ReactNode, tipo: unknown): ReactElement<Record<string, unknown>> | undefined {
@@ -138,6 +141,12 @@ describe('RecepcionBarcoPage', () => {
 
       expect(pantalla?.key).toBe(SESION)
     })
+
+    it('opens its list filtered by the q of the address, which is how the search of a package leads to it', async () => {
+      expect(buscar(await pagina(SESION, ' 0588 '), RecepcionBarco)?.props.filtroInicial).toBe('0588')
+      expect(buscar(await pagina(SESION, ['0588', '1234']), RecepcionBarco)?.props.filtroInicial).toBe('0588')
+      expect(buscar(await pagina(), RecepcionBarco)?.props.filtroInicial).toBe('')
+    })
   })
 
   describe('a recepción that is not open any more', () => {
@@ -182,6 +191,30 @@ describe('RecepcionBarcoPage', () => {
       vi.mocked(operarioHasAlmacen).mockResolvedValue(false)
 
       await expect(pagina()).rejects.toThrow('NEXT_NOT_FOUND')
+    })
+
+    it('opens filtered by the q of the address, with the filter to take it away, however short the list is', async () => {
+      const html = renderToStaticMarkup(await pagina(SESION, '0588'))
+
+      expect(html).toContain('JJD000390007840588')
+      expect(html).not.toContain('JJD000390007711236')
+      expect(html).toContain('aria-label="Filtrar por tracking nº"')
+      expect(html).toContain('value="0588"')
+      expect(html).toContain('Mostrando 1 de 2')
+      expect(html).toContain('Quitar filtro')
+    })
+
+    it('has the filter from a list of six packages, with every package in view while nothing is typed', async () => {
+      const paquetes = Array.from({ length: 6 }, (_, posicion) => ({
+        id: `i${posicion}`, trackingNumber: `JJD00039000784058${posicion}`, courierId: 1, courierNombre: 'DHL', estado: 'ok' as const, duplicadoRef: null,
+      }))
+      vi.mocked(getRecepcion).mockResolvedValue(recepcion({ estado: 'sincronizada', paquetes }))
+
+      const html = renderToStaticMarkup(await pagina())
+
+      expect(html).toContain('aria-label="Filtrar por tracking nº"')
+      expect(html.match(/class="paquete paquete-ok"/g)).toHaveLength(6)
+      expect(html).not.toContain('Quitar filtro')
     })
 
     it('does not let a code act as HTML', async () => {
