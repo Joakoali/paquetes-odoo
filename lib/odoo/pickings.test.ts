@@ -432,14 +432,12 @@ describe('getLineasEntregaPendiente', () => {
     vi.stubEnv('ODOO_FIELD_BARCO', 'x_studio_barco')
   })
 
-  it('reads the pending pickings of the barco and then every move line of them', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }, { id: 2 }])
-      .mockResolvedValueOnce([
-        { id: 7, picking_id: [1, 'MB92/OUT/00487'], lot_id: [30, 'XW1'], product_id: [11, 'DHL'] },
-        { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
-        { id: 9, picking_id: [2, 'MB92/OUT/00501'], lot_id: [32, '1Z999'], product_id: [12, 'UPS'] },
-      ])
+  it('reads every move line of the pending pickings of the barco in one request, through their picking', async () => {
+    vi.mocked(odooCall).mockResolvedValueOnce([
+      { id: 7, picking_id: [1, 'MB92/OUT/00487'], lot_id: [30, 'XW1'], product_id: [11, 'DHL'] },
+      { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
+      { id: 9, picking_id: [2, 'MB92/OUT/00501'], lot_id: [32, '1Z999'], product_id: [12, 'UPS'] },
+    ])
 
     const lineas = await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })
 
@@ -448,30 +446,26 @@ describe('getLineasEntregaPendiente', () => {
       { moveLineId: 8, pickingId: 1, pickingRef: 'MB92/OUT/00487', trackingNumber: 'XW2', courierNombre: 'DHL' },
       { moveLineId: 9, pickingId: 2, pickingRef: 'MB92/OUT/00501', trackingNumber: '1Z999', courierNombre: 'UPS' },
     ])
-    expect(odooCall).toHaveBeenCalledTimes(2)
-    expect(odooCall).toHaveBeenNthCalledWith(1, 'stock.picking', 'search_read', {
+    // One request and not two: odooCall spaces them 1 s apart.
+    expect(odooCall).toHaveBeenCalledTimes(1)
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'search_read', {
+      // The same domain as the list of barcos (`getBarcosConEntregaPendiente`), asked of the picking of each line.
       domain: [
-        ['picking_type_id', '=', 2],
-        ['state', 'not in', ['draft', 'done', 'cancel']],
-        ['x_studio_barco', '!=', false],
-        ['x_studio_barco', '=', 673],
+        ['picking_id.picking_type_id', '=', 2],
+        ['picking_id.state', 'not in', ['draft', 'done', 'cancel']],
+        ['picking_id.x_studio_barco', '!=', false],
+        ['picking_id.x_studio_barco', '=', 673],
       ],
-      fields: ['id'],
-    })
-    expect(odooCall).toHaveBeenNthCalledWith(2, 'stock.move.line', 'search_read', {
-      domain: [['picking_id', 'in', [1, 2]]],
       fields: ['picking_id', 'lot_id', 'product_id'],
     })
     expect(JSON.stringify(vi.mocked(odooCall).mock.calls)).not.toContain('picking_type_code')
   })
 
   it('returns a line without lot as trackingNumber null', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }])
-      .mockResolvedValueOnce([
-        { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
-        { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: false, product_id: [21, 'UPS (incorrecto)'] },
-      ])
+    vi.mocked(odooCall).mockResolvedValueOnce([
+      { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
+      { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: false, product_id: [21, 'UPS (incorrecto)'] },
+    ])
 
     const lineas = await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })
 
@@ -481,9 +475,7 @@ describe('getLineasEntregaPendiente', () => {
   })
 
   it('keeps a line whose product came back empty instead of leaving it out', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }])
-      .mockResolvedValueOnce([{ id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: false }])
+    vi.mocked(odooCall).mockResolvedValueOnce([{ id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: false }])
 
     expect(await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })).toEqual([
       { moveLineId: 9, pickingId: 1, pickingRef: 'MB92/OUT/00487', trackingNumber: 'XW2', courierNombre: 'Sin producto' },
@@ -492,19 +484,17 @@ describe('getLineasEntregaPendiente', () => {
 
   it('leaves out a move line that is in no picking', async () => {
     // The domain already rules it out; the check is for the types.
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }])
-      .mockResolvedValueOnce([
-        { id: 8, picking_id: false, lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
-        { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [32, 'XW3'], product_id: [11, 'DHL'] },
-      ])
+    vi.mocked(odooCall).mockResolvedValueOnce([
+      { id: 8, picking_id: false, lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
+      { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [32, 'XW3'], product_id: [11, 'DHL'] },
+    ])
 
     expect(await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })).toEqual([
       { moveLineId: 9, pickingId: 1, pickingRef: 'MB92/OUT/00487', trackingNumber: 'XW3', courierNombre: 'DHL' },
     ])
   })
 
-  it('does not read any move line when the barco has no pending picking', async () => {
+  it('answers an empty list when the barco has no pending line, with that one request', async () => {
     vi.mocked(odooCall).mockResolvedValueOnce([])
 
     expect(await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })).toEqual([])
@@ -518,7 +508,7 @@ describe('getLineasEntregaPendiente', () => {
     await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })
 
     expect(vi.mocked(odooCall).mock.calls[0][2]).toMatchObject({
-      domain: expect.arrayContaining([['x_studio_otro_barco', '=', 673]]),
+      domain: expect.arrayContaining([['picking_id.x_studio_otro_barco', '=', 673]]),
     })
   })
 

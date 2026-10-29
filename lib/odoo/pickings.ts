@@ -215,6 +215,9 @@ export async function validatePicking(pickingId: number): Promise<void> {
   if (res !== true) await confirmarQueQuedoValidado(pickingId, res)
 }
 
+/** A condition of an Odoo domain: the field, the operator and the value. */
+type Condicion = [campo: string, operador: string, valor: unknown]
+
 /**
  * What a delivery waiting to be handed over is: of the delivery type, with a barco, and neither draft,
  * done nor cancelled. The list of barcos and the list of packages both read with it, so "pending"
@@ -223,12 +226,17 @@ export async function validatePicking(pickingId: number): Promise<void> {
  * `picking_type_code` is left out on purpose: the operation type already says it is a delivery.
  * Asking for the reception type of the almacén together with `outgoing` can never match.
  */
-function dominioEntregasPendientes(outTypeId: number, barcoField: string) {
+function dominioEntregasPendientes(outTypeId: number, barcoField: string): Condicion[] {
   return [
     ['picking_type_id', '=', outTypeId],
     ['state', 'not in', ['draft', 'done', 'cancel']],
     [barcoField, '!=', false],
   ]
+}
+
+/** The same conditions about a picking, asked of the move lines: each one about the picking the line is on. */
+function enSuPicking(dominio: Condicion[]): Condicion[] {
+  return dominio.map(([campo, operador, valor]) => [`picking_id.${campo}`, operador, valor])
 }
 
 /** A picking as read for the list of barcos. Its barco is under the key that `ODOO_FIELD_BARCO` names, hence the index signature. */
@@ -304,19 +312,17 @@ const SIN_PRODUCTO = 'Sin producto'
 /**
  * Every line of the deliveries waiting for the barco in the operation type `outTypeId`, those of all its
  * pending deliveries together. The lines without lot are returned too, with no tracking number: the crew
- * signs for what they see, so nothing is left out. Two requests, or one when the barco has no pending delivery.
+ * signs for what they see, so nothing is left out.
+ *
+ * One request: the lines are asked for through their picking, with the domain the list of barcos uses. A first
+ * request for the pickings would cost a second more, since `odooCall` spaces the requests 1 s apart, and both the
+ * screen of the barco and the confirmation of an entrega read this.
  */
 export async function getLineasEntregaPendiente(entrada: { outTypeId: number; barcoOdooId: number }): Promise<LineaEntrega[]> {
   const { outTypeId, barcoOdooId } = entrada
   const barcoField = campoBarco()
-  const pickings = await odooCall<Array<{ id: number }>>('stock.picking', 'search_read', {
-    domain: [...dominioEntregasPendientes(outTypeId, barcoField), [barcoField, '=', barcoOdooId]],
-    fields: ['id'],
-  })
-  if (pickings.length === 0) return []
-
   const lineas = await odooCall<LineaEntregaRead[]>('stock.move.line', 'search_read', {
-    domain: [['picking_id', 'in', pickings.map((picking) => picking.id)]],
+    domain: enSuPicking([...dominioEntregasPendientes(outTypeId, barcoField), [barcoField, '=', barcoOdooId]]),
     fields: ['picking_id', 'lot_id', 'product_id'],
   })
   // The domain already rules out a line in no picking; the check is for the types.
