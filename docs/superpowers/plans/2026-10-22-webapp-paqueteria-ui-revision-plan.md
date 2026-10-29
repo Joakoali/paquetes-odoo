@@ -1131,22 +1131,22 @@ git commit -m "feat: admin Odoo data refresh and operarios with their almacenes"
 
 Cada paso que escribe en producción necesita el OK del usuario **en ese momento**.
 
-- [ ] **Step 1: Verificación completa en local**
+- [x] **Step 1: Verificación completa en local**
   - Run: `npm test` → todo PASS.
   - Run: `npm run typecheck` → sin errores.
   - Run: `npm run build` → build OK.
 
-- [ ] **Step 2: Neon de producción (con OK del usuario).**
+- [x] **Step 2: Neon de producción (con OK del usuario).**
   1. Correr `db/maintenance/2026-10-22-descartar-sesiones-de-prueba.sql`. Después, `SELECT count(*) FROM sesiones_escaneo WHERE estado = 'en_curso'` tiene que dar `0`.
   2. Aplicar las sentencias de `db/migrations/0001_mejora_ui.sql` en orden, en una transacción (Neon `run_sql_transaction`). **No** usar `drizzle-kit push`: la base de producción se creó con push, no tiene tabla de migraciones, y push pregunta de forma interactiva al agregar constraints únicos.
   3. Verificar que existen `courier_uso`, `sesiones_recepcion_abierta_unica` y `almacenes.odoo_out_type_id`.
 
-- [ ] **Step 3: Deploy (con OK del usuario).**
+- [x] **Step 3: Deploy (con OK del usuario).**
   - `vercel --prod` desde local.
   - Comparar la fecha del deploy activo (`vercel inspect <url>`) con la del último commit: el deploy tiene que ser posterior.
   - Las variables de entorno no cambian. `ODOO_FIELD_RECIBIDO_POR` tiene que ser `x_studio_recibido_por_2`.
 
-- [ ] **Step 4: Primer refresco de datos de Odoo.** En `/admin`, tocar "Refrescar ahora" y esperar unos dos minutos. Verificar en Neon:
+- [x] **Step 4: Primer refresco de datos de Odoo.** En `/admin`, tocar "Refrescar ahora" y esperar unos dos minutos. Verificar en Neon:
   - 8 almacenes activos; MLC queda inactivo;
   - MB92 con `odoo_out_type_id = 2`;
   - unos 70 couriers activos; el 11 se llama "DHL" y el 21 queda inactivo;
@@ -1154,7 +1154,7 @@ Cada paso que escribe en producción necesita el OK del usuario **en ese momento
   - `tracking_activos_cache` con más de 4 filas;
   - las asignaciones de Eduardo (MB92, MPV) y Veronika (MB92) intactas.
 
-- [ ] **Step 5: Escribir el runbook de QA** `docs/superpowers/runbooks/2026-10-22-qa-mejora-ui.md` con el checklist de §10 del spec y estos chequeos (todos con el **barco de QA** y tandas chicas):
+- [x] **Step 5: Escribir el runbook de QA** `docs/superpowers/runbooks/2026-10-22-qa-mejora-ui.md` con el checklist de §10 del spec y estos chequeos (todos con el **barco de QA** y tandas chicas):
   - **Tablet con la pistola Bluetooth:**
     - 10 escaneos seguidos y rápidos: aparecen 10 filas en orden;
     - el Enter nunca activa un botón;
@@ -1177,9 +1177,9 @@ Cada paso que escribe en producción necesita el OK del usuario **en ese momento
     - verificar que aparece con "Lo tiene que arreglar el admin" y que la cola sigue procesando otras sesiones;
     - restaurar el dato.
 
-- [ ] **Step 6: Correr el QA con el usuario.** Anotar los resultados en el runbook y corregir lo que falle. Cada fix lleva su test y su commit.
+- [x] **Step 6: Correr el QA con el usuario.** Anotar los resultados en el runbook y corregir lo que falle. Cada fix lleva su test y su commit.
 
-- [ ] **Step 7: Commit y cierre**
+- [x] **Step 7: Commit y cierre**
 
 ```bash
 git add docs/superpowers/runbooks/2026-10-22-qa-mejora-ui.md
