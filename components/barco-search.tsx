@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { searchBarcosAction } from '@/app/(app)/barcos-actions'
 // Type only: lib/cache/barcos.ts reaches the database, which must not get into the client.
 import type { BarcoOpcion } from '@/lib/cache/barcos'
+import { BuscarComoTracking } from './buscar-como-tracking'
 import { contadorDePedidos, ESPERA_MS, LETRAS_MINIMAS, textoABuscar } from '@/lib/ui/busqueda-barcos'
 import { SIN_RESPUESTA } from '@/lib/ui/textoDeFallo'
 
@@ -19,13 +20,17 @@ import { SIN_RESPUESTA } from '@/lib/ui/textoDeFallo'
  *
  * It is typed into with the on-screen keyboard, so a screen that also has a scan field (the home of Recepción) must
  * not let that one take the focus while this one is being used: see `ScanInput`, which leaves any other field alone.
+ *
+ * With `buscarComoTracking`, what no barco is called is offered to be searched as a tracking number: what was typed may
+ * be one. Not where a barco is all that can be chosen (the dialog that holds a code of the gun).
  */
-export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabilitado = false }: {
+export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabilitado = false, buscarComoTracking = false }: {
   onElegir: (barco: BarcoOpcion) => void
   placeholder: string
   autoFocus?: boolean
   /** While what a choice started is still running: the results are not pressed twice. */
   deshabilitado?: boolean
+  buscarComoTracking?: boolean
 }) {
   const [texto, setTexto] = useState('')
   const [barcos, setBarcos] = useState<BarcoOpcion[] | null>(null)
@@ -80,11 +85,12 @@ export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabil
   }
 
   const demasiadoCorto = texto.trim().length > 0 && textoABuscar(texto) === null
+  const ninguno = barcos !== null && barcos.length === 0 && !buscando
   const aviso = demasiadoCorto
     ? `Escribí al menos ${LETRAS_MINIMAS} letras.`
     : buscando && barcos === null
       ? 'Buscando…'
-      : barcos !== null && barcos.length === 0 && !buscando
+      : ninguno
         ? 'Ningún barco se llama así.'
         : null
 
@@ -108,6 +114,7 @@ export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabil
       <div role="status">
         {aviso ? <p className="busqueda-estado">{aviso}</p> : null}
       </div>
+      {ninguno && buscarComoTracking ? <BuscarComoTracking escrito={texto} /> : null}
       {fallo ? <p className="banner banner-error" role="alert">{fallo}</p> : null}
 
       {barcos !== null && barcos.length > 0 ? (

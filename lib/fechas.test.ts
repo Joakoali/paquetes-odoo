@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { ZONA_HORARIA, formatFechaOdoo, haceCuanto, inicioDeHoy, parseFechaOdoo } from './fechas'
+import { ZONA_HORARIA, fechaYHora, formatFechaOdoo, haceCuanto, inicioDeHoy, parseFechaOdoo } from './fechas'
 
 describe('fechas', () => {
   it('names the time zone the warehouses work in', () => {
@@ -95,5 +95,23 @@ describe('haceCuanto', () => {
 
   it('reads a moment slightly ahead of now as recién: the database clock and the app clock never agree exactly', () => {
     expect(haceCuanto(new Date(AHORA.getTime() + 5 * SEG), AHORA)).toBe('recién')
+  })
+})
+
+describe('fechaYHora', () => {
+  const AHORA = new Date('2026-10-29T12:00:00Z')
+
+  it('says the day and the time on the clock of Madrid, in summer and in winter', () => {
+    // 2 h ahead of UTC until the last Sunday of October, 1 h after it.
+    expect(fechaYHora(new Date('2026-10-24T08:32:00Z'), AHORA)).toBe('24/10 10:32')
+    expect(fechaYHora(new Date('2026-10-28T08:32:00Z'), AHORA)).toBe('28/10 09:32')
+  })
+
+  it('counts the day in Madrid: a quarter to midnight in UTC is already the next day there', () => {
+    expect(fechaYHora(new Date('2026-10-28T23:45:00Z'), AHORA)).toBe('29/10 00:45')
+  })
+
+  it('says the year only when it is not the year of now', () => {
+    expect(fechaYHora(new Date('2025-12-31T10:05:00Z'), AHORA)).toBe('31/12/2025 11:05')
   })
 })

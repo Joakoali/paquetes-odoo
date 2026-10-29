@@ -29,7 +29,7 @@ export function etiquetasDeBarcos(barcos: ReadonlyArray<{ odooId: number; nombre
 }
 
 /** What the operator types is literal text: `%` and `_` are not wildcards, and `\` is LIKE's escape character. */
-function escaparLike(texto: string): string {
+export function escaparLike(texto: string): string {
   return texto.replace(/[\\%_]/g, '\\$&')
 }
 

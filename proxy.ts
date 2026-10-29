@@ -30,5 +30,6 @@ export const config = {
     { source: '/recepcion/:path*', missing: [{ type: 'header', key: 'next-action' }] },
     { source: '/entrega/:path*', missing: [{ type: 'header', key: 'next-action' }] },
     { source: '/pendientes/:path*', missing: [{ type: 'header', key: 'next-action' }] },
+    { source: '/buscar/:path*', missing: [{ type: 'header', key: 'next-action' }] },
   ],
 }

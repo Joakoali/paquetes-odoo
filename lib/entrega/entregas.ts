@@ -232,7 +232,8 @@ export interface EntregaDeHoy {
 /** Entregas that were confirmed, whatever became of their sync. */
 const ESTADOS_CONFIRMADA: SesionEscaneo['estado'][] = ['confirmada_pendiente_sync', 'sincronizada', 'error']
 
-function estadoDeEntrega(estado: SesionEscaneo['estado'], ultimoError: string | null): EntregaDeHoy['estado'] {
+/** How the sync of an entrega that was confirmed is going: what Entregadas hoy says of it, and the search of a package too. */
+export function estadoDeEntrega(estado: SesionEscaneo['estado'], ultimoError: string | null): EntregaDeHoy['estado'] {
   if (estado === 'confirmada_pendiente_sync') return 'enviando'
   // The same rule as for the recepciones: a sync that left a note in `ultimoError` is not a clean one.
   return estado === 'sincronizada' && !ultimoError ? 'ok' : 'problema'
