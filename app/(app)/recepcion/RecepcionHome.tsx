@@ -19,7 +19,7 @@ import {
 } from '@/lib/ui/inicio-recepcion'
 import { respuestaDeFallo, SIN_COURIER, type Respuesta } from '@/lib/ui/respuesta-escaneo'
 import { prepararSonidos, sonarAviso, sonarOk } from '@/lib/ui/sonidos'
-import { llamarAccion } from '@/lib/ui/textoDeFallo'
+import { llamarAccion, sinRespuesta } from '@/lib/ui/textoDeFallo'
 import { abrirRecepcionAction, asignarYEscanearAction, descartarSiVaciaAction, enviarTodasAction } from './actions'
 
 /** An open recepción: its barco, what it has and for how long, and it opens when touched. After 24 hours the time is a warning. */
@@ -186,8 +186,9 @@ export function RecepcionHome({ abiertas, enviadas, couriers, ahora }: {
         const cuantas = enviadas === 1 ? 'Se envió 1 recepción' : `Se enviaron ${enviadas} recepciones`
         setRespuesta({ tono: 'ok', texto: `✓ ${cuantas} a Odoo.`, sonido: null })
       }
-      // Also when it stopped halfway: what was sent is not open any more.
-      router.refresh()
+      // Also when it stopped halfway, what was sent is not open any more. The action revalidates /recepcion in any
+      // case, and its answer brings the lists as they are now: only a call that got no answer needs them read again.
+      if (sinRespuesta(resultado)) router.refresh()
     })
   }
 

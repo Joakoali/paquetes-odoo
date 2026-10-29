@@ -11,7 +11,7 @@ import {
   alternarLinea, MAX_NOMBRE_RECEPTOR, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEnviandose, textoDeLinea,
   textoDeSeleccion, textoDeSiguiente, textoSinPaquetes,
 } from '@/lib/ui/seleccion-entrega'
-import { llamarAccion } from '@/lib/ui/textoDeFallo'
+import { llamarAccion, sinRespuesta } from '@/lib/ui/textoDeFallo'
 import { confirmarEntregaAction, enviarRecepcionesDelBarcoAction } from '../actions'
 
 type Paso = 'paquetes' | 'firma' | 'hecho'
@@ -116,8 +116,10 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       } else {
         setAviso({ tono: 'ok', texto: '✓ Enviado a Odoo. Los paquetes tardan alrededor de un minuto en aparecer acá.', actualizar: true })
       }
-      // Also when it stopped halfway: what was sent is not unsent any more.
-      router.refresh()
+      // Also when it stopped halfway, what was sent is not unsent any more. The action revalidates in any case, and its
+      // answer brings this screen read again, Odoo included: reading it once more would wait for Odoo a second time.
+      // Only a call that got no answer needs it.
+      if (sinRespuesta(resultado)) router.refresh()
     })
   }
 

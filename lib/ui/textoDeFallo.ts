@@ -28,6 +28,15 @@ export async function llamarAccion<T>(llamada: () => Promise<ResultadoAccion<T>>
 }
 
 /**
+ * Whether the call got no answer at all (what `llamarAccion` gives back for a call that failed), and not an answer
+ * that says something did not work. Only then is it unknown what the action did on the server: an action that
+ * answered has already brought the screen up to date if it revalidated.
+ */
+export function sinRespuesta(resultado: ResultadoAccion<unknown>): boolean {
+  return !resultado.ok && resultado.error === SIN_RESPUESTA
+}
+
+/**
  * Runs a server action on a sesión and gives back the text to show next to the button if it did not work,
  * or null if it did. For the buttons that only need to know that: the ones that need what the action
  * answered use `llamarAccion`.
