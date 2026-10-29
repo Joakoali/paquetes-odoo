@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { refresh, revalidatePath } from 'next/cache'
 import type { Almacen } from '@/db/schema'
 import { ejecutarAccion, type ResultadoAccion } from '@/lib/acciones'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
@@ -146,6 +146,10 @@ export async function enviarRecepcionesDelBarcoAction(barcoOdooId: number): Prom
       // Also when it stops halfway: the recepciones sent before the failure are not open, nor unsent, any more.
       revalidatePath('/entrega')
       revalidatePath('/recepcion')
+      // And the barco this is called from comes drawn again in the answer, with what is still unsent: the screen does
+      // not ask for it again (EntregaFlow). Said apart because the page is not '/entrega', and Next means to re-render
+      // only the paths revalidated.
+      refresh()
     }
   })
 }

@@ -116,9 +116,9 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       } else {
         setAviso({ tono: 'ok', texto: '✓ Enviado a Odoo. Los paquetes tardan alrededor de un minuto en aparecer acá.', actualizar: true })
       }
-      // Also when it stopped halfway, what was sent is not unsent any more. The action revalidates in any case, and its
-      // answer brings this screen read again, Odoo included: reading it once more would wait for Odoo a second time.
-      // Only a call that got no answer needs it.
+      // Also when it stopped halfway, what was sent is not unsent any more. The action draws this screen again in its
+      // answer in any case (`refresh`), Odoo included: reading it once more would wait for Odoo a second time. Only a
+      // call that got no answer needs it.
       if (sinRespuesta(resultado)) router.refresh()
     })
   }

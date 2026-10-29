@@ -59,6 +59,8 @@
 
 Producción no tiene tabla de migraciones: se aplica a mano, primero en una rama de Neon.
 
+Mientras se construye, `CREATE INDEX` frena las escrituras de su tabla: escaneos, envíos y entregas esperan a que termine. Con las tablas de hoy son milisegundos, pero conviene aplicarlo fuera del turno. Si tiene que ser con gente trabajando, usar `CREATE INDEX CONCURRENTLY` (no frena escrituras), uno por uno y **sin** `BEGIN`/`COMMIT`, porque no corre dentro de una transacción.
+
 ```sql
 BEGIN;
 CREATE INDEX "sesion_items_duplicado_al_enviar_idx" ON "sesion_items" USING btree ("courier_batch_id") WHERE duplicado_al_enviar;

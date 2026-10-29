@@ -92,7 +92,7 @@ describe('llamarAccion', () => {
       throw new TypeError('Failed to fetch')
     })
 
-    expect(resultado).toEqual({ ok: false, error: SIN_RESPUESTA })
+    expect(resultado).toEqual({ ok: false, error: SIN_RESPUESTA, sinRespuesta: true })
     expect(consola).toHaveBeenCalledTimes(1)
   })
 
@@ -116,5 +116,9 @@ describe('sinRespuesta', () => {
   it('is false for an action that answered, whether it worked or not', () => {
     expect(sinRespuesta({ ok: true, valor: undefined })).toBe(false)
     expect(sinRespuesta({ ok: false, error: 'No tenés acceso a esto.' })).toBe(false)
+  })
+
+  it('does not go by the text: an action that answers the same words did answer', () => {
+    expect(sinRespuesta({ ok: false, error: SIN_RESPUESTA })).toBe(false)
   })
 })

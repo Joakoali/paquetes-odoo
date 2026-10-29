@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, notExists, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, inArray, notExists, sql, type SQL } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
   almacenes, barcosCache, couriers, sesionCourierBatches, sesionItems, sesionesEscaneo,
@@ -51,6 +51,15 @@ function buscarRecepcion(sesionId: string) {
     columns: { id: true, almacenId: true, barcoOdooId: true, estado: true },
     where: and(eq(sesionesEscaneo.id, sesionId), eq(sesionesEscaneo.tipo, 'recepcion')),
   })
+}
+
+/**
+ * A recepción that is still `en_curso`, as a condition: what the statements that may only touch an open recepción ask,
+ * the write of a scan (`guardarPaquete`) and the lock of the discards (`bloquearAbierta`) among them. One definition,
+ * so that the lock and what it protects always cover the same row.
+ */
+function recepcionAbierta(sesionId: string): SQL {
+  return sql`(${eq(sesionesEscaneo.id, sesionId)} and ${eq(sesionesEscaneo.tipo, 'recepcion')} and ${eq(sesionesEscaneo.estado, 'en_curso')})`
 }
 
 /** Why a recepción cannot be changed: there is none, or it is not `en_curso` any more. */
@@ -159,9 +168,7 @@ async function guardarPaquete(paquete: PaqueteNuevo): Promise<PaqueteGuardado> {
   const { rows } = await db.execute<{ abierta: boolean; paquete_id: string | null }>(sql`
     with abierta as (
       select ${sesionesEscaneo.id} as id from ${sesionesEscaneo}
-      where ${sesionesEscaneo.id} = ${paquete.sesionId}
-        and ${sesionesEscaneo.tipo} = 'recepcion'
-        and ${sesionesEscaneo.estado} = 'en_curso'
+      where ${recepcionAbierta(paquete.sesionId)}
       for share
     ), tanda as (
       insert into ${sesionCourierBatches} (sesion_id, courier_id)
@@ -249,10 +256,7 @@ function tandasAbiertas(sesionId?: string) {
  * instead of each holding something the other needs.
  */
 function bloquearAbierta(sesionId: string) {
-  return db.select({ id: sesionesEscaneo.id })
-    .from(sesionesEscaneo)
-    .where(and(eq(sesionesEscaneo.id, sesionId), eq(sesionesEscaneo.tipo, 'recepcion'), eq(sesionesEscaneo.estado, 'en_curso')))
-    .for('update')
+  return db.select({ id: sesionesEscaneo.id }).from(sesionesEscaneo).where(recepcionAbierta(sesionId)).for('update')
 }
 
 /** How many packages the recepción has: the `ok` ones, which are sent, and the `duplicado` ones, which are not. */
@@ -302,9 +306,7 @@ export async function descartarRecepcion(entrada: { sesionId: string; operarioId
     bloquearAbierta(sesionId),
     db.delete(sesionItems).where(inArray(sesionItems.courierBatchId, tandasAbiertas(sesionId))),
     db.delete(sesionCourierBatches).where(inArray(sesionCourierBatches.id, tandasAbiertas(sesionId))),
-    db.delete(sesionesEscaneo)
-      .where(and(eq(sesionesEscaneo.id, sesionId), eq(sesionesEscaneo.estado, 'en_curso')))
-      .returning({ id: sesionesEscaneo.id }),
+    db.delete(sesionesEscaneo).where(recepcionAbierta(sesionId)).returning({ id: sesionesEscaneo.id }),
   ])
   if (borradas.length === 0) throw new RecepcionCerradaError()
 
@@ -328,11 +330,7 @@ export async function descartarRecepcion(entrada: { sesionId: string; operarioId
  */
 export async function descartarSiVacia(entrada: { sesionId: string; operarioId: string }): Promise<boolean> {
   const { sesionId, operarioId } = entrada
-  const abierta = and(
-    eq(sesionesEscaneo.id, sesionId),
-    eq(sesionesEscaneo.tipo, 'recepcion'),
-    eq(sesionesEscaneo.estado, 'en_curso'),
-  )
+  const abierta = recepcionAbierta(sesionId)
 
   const [, , borradas] = await db.batch([
     bloquearAbierta(sesionId),

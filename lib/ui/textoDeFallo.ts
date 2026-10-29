@@ -8,6 +8,12 @@ import type { ResultadoAccion } from '@/lib/acciones'
 export const SIN_RESPUESTA = 'No hubo respuesta del servidor. Revisá la conexión y probá de nuevo.'
 
 /**
+ * What `llamarAccion` gives back: what the action answered or, when the call got no answer at all, a failure like
+ * any other that says so (`sinRespuesta`), so that it can be told apart without looking at its text.
+ */
+export type ResultadoLlamada<T> = ResultadoAccion<T> | { ok: false; error: string; sinRespuesta: true }
+
+/**
  * Makes the call of a server action and gives back what it answered. The failures the action expects (an
  * expired session, no access, a recepción that was already sent) come back as `{ ok: false, error }` with the
  * text already written for the operario.
@@ -18,12 +24,12 @@ export const SIN_RESPUESTA = 'No hubo respuesta del servidor. Revisá la conexi�
  * rejects while a scan is being checked), so it is answered as one more failure, with `SIN_RESPUESTA`. It is
  * logged, so that it can still be looked at.
  */
-export async function llamarAccion<T>(llamada: () => Promise<ResultadoAccion<T>>): Promise<ResultadoAccion<T>> {
+export async function llamarAccion<T>(llamada: () => Promise<ResultadoAccion<T>>): Promise<ResultadoLlamada<T>> {
   try {
     return await llamada()
   } catch (error) {
     console.error('Server action could not be called', error)
-    return { ok: false, error: SIN_RESPUESTA }
+    return { ok: false, error: SIN_RESPUESTA, sinRespuesta: true }
   }
 }
 
@@ -32,8 +38,8 @@ export async function llamarAccion<T>(llamada: () => Promise<ResultadoAccion<T>>
  * that says something did not work. Only then is it unknown what the action did on the server: an action that
  * answered has already brought the screen up to date if it revalidated.
  */
-export function sinRespuesta(resultado: ResultadoAccion<unknown>): boolean {
-  return !resultado.ok && resultado.error === SIN_RESPUESTA
+export function sinRespuesta(resultado: ResultadoLlamada<unknown>): boolean {
+  return 'sinRespuesta' in resultado
 }
 
 /**

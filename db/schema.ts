@@ -106,7 +106,10 @@ export const sesionesEscaneo = pgTable('sesiones_escaneo', {
   // Without it, every render of those homes reads every sesión ever made.
   enviadasPorAlmacen: index('sesiones_escaneo_almacen_tipo_confirmed_at_idx').on(t.almacenId, t.tipo, t.confirmedAt),
   // What is waiting for the worker, a handful at any time: the entregas of a barco on their way to Odoo, which the
-  // delivery screens must not offer again (`moveLineIdsRetenidas`).
+  // delivery screens must not offer again (`moveLineIdsRetenidas`). That query sends the estado as a parameter, and
+  // Postgres matches it to this predicate when it plans the query with its values (a custom plan, checked with EXPLAIN
+  // on Postgres 16); a generic plan, which only a prepared statement reused on a connection gets, would fall back to
+  // the index above. `esDuplicadoSinRevisar` writes its condition with no parameter, so it does not depend on that.
   esperandoSync: index('sesiones_escaneo_esperando_sync_idx')
     .on(t.almacenId, t.barcoOdooId)
     .where(sql`estado = 'confirmada_pendiente_sync'`),
