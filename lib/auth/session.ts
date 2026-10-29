@@ -1,4 +1,5 @@
-import { eq } from 'drizzle-orm'
+import { cache } from 'react'
+import { and, eq, gte } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { sesionesAuth, operarios, type Operario } from '../../db/schema'
 
@@ -12,18 +13,18 @@ export async function createSession(operarioId: string): Promise<string> {
   return row.id
 }
 
-export async function getSessionOperario(token: string): Promise<Operario | null> {
-  const session = await db.query.sesionesAuth.findFirst({
-    where: eq(sesionesAuth.id, token),
-  })
-  if (!session || session.expiresAt < new Date()) return null
-
-  const operario = await db.query.operarios.findFirst({
-    where: eq(operarios.id, session.operarioId),
-  })
-  if (!operario || !operario.activo) return null
-  return operario
-}
+/**
+ * The operario of the session, while it has not expired and the operario is active; null otherwise. One query for
+ * both, and one per render: the layout and the page ask for it in the same render, and `cache` gives both the same
+ * answer.
+ */
+export const getSessionOperario = cache(async (token: string): Promise<Operario | null> => {
+  const [fila] = await db.select({ operario: operarios })
+    .from(sesionesAuth)
+    .innerJoin(operarios, eq(operarios.id, sesionesAuth.operarioId))
+    .where(and(eq(sesionesAuth.id, token), gte(sesionesAuth.expiresAt, new Date()), eq(operarios.activo, true)))
+  return fila?.operario ?? null
+})
 
 export async function destroySession(token: string): Promise<void> {
   await db.delete(sesionesAuth).where(eq(sesionesAuth.id, token))

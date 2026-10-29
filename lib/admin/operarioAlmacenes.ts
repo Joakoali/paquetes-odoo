@@ -1,3 +1,4 @@
+import { cache } from 'react'
 import { and, asc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import { almacenes, operarioAlmacenes, type Almacen } from '../../db/schema'
@@ -7,8 +8,11 @@ import { ErrorParaOperario } from '../errores'
  * The almacenes the operario can work in: the assigned ones that are still active (an almacén
  * Odoo no longer has stays assigned but cannot be worked in), by name. The order is part of the
  * contract: the first one is the default almacén when the device has not chosen another.
+ *
+ * Read once per render (`cache`): the layout needs them for the bar and for Pendientes, and the page
+ * for the almacén it works in.
  */
-export async function getAlmacenesForOperario(operarioId: string): Promise<Almacen[]> {
+export const getAlmacenesForOperario = cache(async (operarioId: string): Promise<Almacen[]> => {
   const filas = await db.select({ almacen: almacenes })
     .from(operarioAlmacenes)
     .innerJoin(almacenes, eq(almacenes.id, operarioAlmacenes.almacenId))
@@ -17,7 +21,7 @@ export async function getAlmacenesForOperario(operarioId: string): Promise<Almac
     // the id last so that two almacenes with the same name always come in the same order.
     .orderBy(asc(sql`lower(${almacenes.nombre})`), asc(almacenes.id))
   return filas.map((fila) => fila.almacen)
-}
+})
 
 /** Every almacén that is still active, by name, like `getAlmacenesForOperario`: what the admin can assign. */
 export async function listAlmacenesActivos(): Promise<Almacen[]> {
