@@ -111,15 +111,15 @@ describe('createIncomingPicking', () => {
 })
 
 describe('addCourierMoveWithLines', () => {
-  it('creates one move and one batch move.line call for all tracking numbers', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([900]) // move create
-      .mockResolvedValueOnce([1, 2]) // move.line create (batch)
+  it('creates the move with all its lines in one request, the lines as create commands of the move', async () => {
+    vi.mocked(odooCall).mockResolvedValueOnce([900])
 
     const moveId = await addCourierMoveWithLines(501, 15, ['T1', 'T2'], 1, 5)
 
     expect(moveId).toBe(900)
-    expect(odooCall).toHaveBeenNthCalledWith(1, 'stock.move', 'create', {
+    // One request and not two: odooCall spaces them 1 s apart, and a move without its lines cannot be left behind.
+    expect(odooCall).toHaveBeenCalledTimes(1)
+    expect(odooCall).toHaveBeenCalledWith('stock.move', 'create', {
       vals_list: [{
         picking_id: 501,
         product_id: 15,
@@ -128,13 +128,11 @@ describe('addCourierMoveWithLines', () => {
         location_id: 1,
         location_dest_id: 5,
         picked: true,
+        move_line_ids: [
+          [0, 0, { picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true }],
+          [0, 0, { picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true }],
+        ],
       }],
-    })
-    expect(odooCall).toHaveBeenNthCalledWith(2, 'stock.move.line', 'create', {
-      vals_list: [
-        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true },
-        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true },
-      ],
     })
   })
 })
@@ -162,13 +160,16 @@ describe('resumeCourierMoveWithLines', () => {
       domain: [['picking_id', '=', 501], ['product_id', '=', 15], ['state', '!=', 'cancel']],
       fields: ['id'],
     }])
-    expect(llamadas('stock.move', 'create')).toHaveLength(1)
-    expect(llamadas('stock.move.line', 'create')).toEqual([{
-      vals_list: [
-        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true },
-        { move_id: 900, picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true },
-      ],
+    // The move comes with its lines, in the same request.
+    expect(llamadas('stock.move', 'create')).toEqual([{
+      vals_list: [expect.objectContaining({
+        move_line_ids: [
+          [0, 0, { picking_id: 501, product_id: 15, lot_name: 'T1', quantity: 1, picked: true }],
+          [0, 0, { picking_id: 501, product_id: 15, lot_name: 'T2', quantity: 1, picked: true }],
+        ],
+      })],
     }])
+    expect(llamadas('stock.move.line', 'create')).toEqual([])
   })
 
   it('makes no second move when the courier has one without lines, and gives it all its lines', async () => {
@@ -223,8 +224,8 @@ describe('resumeCourierMoveWithLines', () => {
 
 describe('validatePicking', () => {
   /**
-   * An Odoo that answers each call of `validatePicking`: `true` to confirm and assign, `alValidar` to
-   * `button_validate`, and `estado` when the state of the picking is read afterwards (null: no such picking).
+   * An Odoo that answers each call of `validatePicking`: `alValidar` to `button_validate`, and `estado` when the
+   * state of the picking is read afterwards (null: no such picking).
    */
   function odooResponde(alValidar: unknown, estado: string | null = null) {
     vi.mocked(odooCall).mockImplementation((async (_modelo: string, metodo: string) => {
@@ -234,14 +235,13 @@ describe('validatePicking', () => {
     }) as never)
   }
 
-  it('runs confirm, assign, and validate in sequence', async () => {
+  it('validates with button_validate alone, which confirms a draft picking itself', async () => {
     vi.mocked(odooCall).mockResolvedValue(true)
 
     await validatePicking(501)
 
-    expect(odooCall).toHaveBeenNthCalledWith(1, 'stock.picking', 'action_confirm', { ids: [501] })
-    expect(odooCall).toHaveBeenNthCalledWith(2, 'stock.picking', 'action_assign', { ids: [501] })
-    expect(odooCall).toHaveBeenNthCalledWith(3, 'stock.picking', 'button_validate', { ids: [501] })
+    expect(odooCall).toHaveBeenCalledTimes(1)
+    expect(odooCall).toHaveBeenCalledWith('stock.picking', 'button_validate', { ids: [501] })
   })
 
   it('makes no call beyond the validation when Odoo answers true: the picking is done and there is nothing to ask', async () => {
@@ -249,7 +249,7 @@ describe('validatePicking', () => {
 
     await validatePicking(501)
 
-    expect(vi.mocked(odooCall).mock.calls.map(([, metodo]) => metodo)).toEqual(['action_confirm', 'action_assign', 'button_validate'])
+    expect(vi.mocked(odooCall).mock.calls.map(([, metodo]) => metodo)).toEqual(['button_validate'])
   })
 
   // `button_validate` can finish `_action_done` and still answer with an action instead of `true`: a report to print
@@ -264,7 +264,7 @@ describe('validatePicking', () => {
     await expect(validatePicking(501)).resolves.toBeUndefined()
 
     // One read of the state, after the validation, and nothing else.
-    expect(vi.mocked(odooCall).mock.calls.slice(3)).toEqual([['stock.picking', 'read', { ids: [501], fields: ['state'] }]])
+    expect(vi.mocked(odooCall).mock.calls.slice(1)).toEqual([['stock.picking', 'read', { ids: [501], fields: ['state'] }]])
   })
 
   it.each([[false], [null]])('counts the validation as done when Odoo answers %s and the picking is done', async (respuesta) => {
@@ -432,14 +432,12 @@ describe('getLineasEntregaPendiente', () => {
     vi.stubEnv('ODOO_FIELD_BARCO', 'x_studio_barco')
   })
 
-  it('reads the pending pickings of the barco and then every move line of them', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }, { id: 2 }])
-      .mockResolvedValueOnce([
-        { id: 7, picking_id: [1, 'MB92/OUT/00487'], lot_id: [30, 'XW1'], product_id: [11, 'DHL'] },
-        { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
-        { id: 9, picking_id: [2, 'MB92/OUT/00501'], lot_id: [32, '1Z999'], product_id: [12, 'UPS'] },
-      ])
+  it('reads every move line of the pending pickings of the barco in one request, through their picking', async () => {
+    vi.mocked(odooCall).mockResolvedValueOnce([
+      { id: 7, picking_id: [1, 'MB92/OUT/00487'], lot_id: [30, 'XW1'], product_id: [11, 'DHL'] },
+      { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
+      { id: 9, picking_id: [2, 'MB92/OUT/00501'], lot_id: [32, '1Z999'], product_id: [12, 'UPS'] },
+    ])
 
     const lineas = await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })
 
@@ -448,30 +446,26 @@ describe('getLineasEntregaPendiente', () => {
       { moveLineId: 8, pickingId: 1, pickingRef: 'MB92/OUT/00487', trackingNumber: 'XW2', courierNombre: 'DHL' },
       { moveLineId: 9, pickingId: 2, pickingRef: 'MB92/OUT/00501', trackingNumber: '1Z999', courierNombre: 'UPS' },
     ])
-    expect(odooCall).toHaveBeenCalledTimes(2)
-    expect(odooCall).toHaveBeenNthCalledWith(1, 'stock.picking', 'search_read', {
+    // One request and not two: odooCall spaces them 1 s apart.
+    expect(odooCall).toHaveBeenCalledTimes(1)
+    expect(odooCall).toHaveBeenCalledWith('stock.move.line', 'search_read', {
+      // The same domain as the list of barcos (`getBarcosConEntregaPendiente`), asked of the picking of each line.
       domain: [
-        ['picking_type_id', '=', 2],
-        ['state', 'not in', ['draft', 'done', 'cancel']],
-        ['x_studio_barco', '!=', false],
-        ['x_studio_barco', '=', 673],
+        ['picking_id.picking_type_id', '=', 2],
+        ['picking_id.state', 'not in', ['draft', 'done', 'cancel']],
+        ['picking_id.x_studio_barco', '!=', false],
+        ['picking_id.x_studio_barco', '=', 673],
       ],
-      fields: ['id'],
-    })
-    expect(odooCall).toHaveBeenNthCalledWith(2, 'stock.move.line', 'search_read', {
-      domain: [['picking_id', 'in', [1, 2]]],
       fields: ['picking_id', 'lot_id', 'product_id'],
     })
     expect(JSON.stringify(vi.mocked(odooCall).mock.calls)).not.toContain('picking_type_code')
   })
 
   it('returns a line without lot as trackingNumber null', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }])
-      .mockResolvedValueOnce([
-        { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
-        { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: false, product_id: [21, 'UPS (incorrecto)'] },
-      ])
+    vi.mocked(odooCall).mockResolvedValueOnce([
+      { id: 8, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
+      { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: false, product_id: [21, 'UPS (incorrecto)'] },
+    ])
 
     const lineas = await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })
 
@@ -481,9 +475,7 @@ describe('getLineasEntregaPendiente', () => {
   })
 
   it('keeps a line whose product came back empty instead of leaving it out', async () => {
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }])
-      .mockResolvedValueOnce([{ id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: false }])
+    vi.mocked(odooCall).mockResolvedValueOnce([{ id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [31, 'XW2'], product_id: false }])
 
     expect(await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })).toEqual([
       { moveLineId: 9, pickingId: 1, pickingRef: 'MB92/OUT/00487', trackingNumber: 'XW2', courierNombre: 'Sin producto' },
@@ -492,19 +484,17 @@ describe('getLineasEntregaPendiente', () => {
 
   it('leaves out a move line that is in no picking', async () => {
     // The domain already rules it out; the check is for the types.
-    vi.mocked(odooCall)
-      .mockResolvedValueOnce([{ id: 1 }])
-      .mockResolvedValueOnce([
-        { id: 8, picking_id: false, lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
-        { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [32, 'XW3'], product_id: [11, 'DHL'] },
-      ])
+    vi.mocked(odooCall).mockResolvedValueOnce([
+      { id: 8, picking_id: false, lot_id: [31, 'XW2'], product_id: [11, 'DHL'] },
+      { id: 9, picking_id: [1, 'MB92/OUT/00487'], lot_id: [32, 'XW3'], product_id: [11, 'DHL'] },
+    ])
 
     expect(await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })).toEqual([
       { moveLineId: 9, pickingId: 1, pickingRef: 'MB92/OUT/00487', trackingNumber: 'XW3', courierNombre: 'DHL' },
     ])
   })
 
-  it('does not read any move line when the barco has no pending picking', async () => {
+  it('answers an empty list when the barco has no pending line, with that one request', async () => {
     vi.mocked(odooCall).mockResolvedValueOnce([])
 
     expect(await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })).toEqual([])
@@ -518,7 +508,7 @@ describe('getLineasEntregaPendiente', () => {
     await getLineasEntregaPendiente({ outTypeId: 2, barcoOdooId: 673 })
 
     expect(vi.mocked(odooCall).mock.calls[0][2]).toMatchObject({
-      domain: expect.arrayContaining([['x_studio_otro_barco', '=', 673]]),
+      domain: expect.arrayContaining([['picking_id.x_studio_otro_barco', '=', 673]]),
     })
   })
 

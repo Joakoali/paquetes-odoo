@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ResultadoAccion } from '@/lib/acciones'
-import { llamarAccion, SIN_RESPUESTA, textoDeFallo } from './textoDeFallo'
+import { llamarAccion, SIN_RESPUESTA, sinRespuesta, textoDeFallo } from './textoDeFallo'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -92,7 +92,7 @@ describe('llamarAccion', () => {
       throw new TypeError('Failed to fetch')
     })
 
-    expect(resultado).toEqual({ ok: false, error: SIN_RESPUESTA })
+    expect(resultado).toEqual({ ok: false, error: SIN_RESPUESTA, sinRespuesta: true })
     expect(consola).toHaveBeenCalledTimes(1)
   })
 
@@ -103,5 +103,22 @@ describe('llamarAccion', () => {
     await llamarAccion(async () => ({ ok: true as const, valor: 1 }))
 
     expect(consola).not.toHaveBeenCalled()
+  })
+})
+
+describe('sinRespuesta', () => {
+  it('is true for a call that got no answer, which is all llamarAccion knows of it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(sinRespuesta(await llamarAccion(() => Promise.reject(new TypeError('Failed to fetch'))))).toBe(true)
+  })
+
+  it('is false for an action that answered, whether it worked or not', () => {
+    expect(sinRespuesta({ ok: true, valor: undefined })).toBe(false)
+    expect(sinRespuesta({ ok: false, error: 'No tenés acceso a esto.' })).toBe(false)
+  })
+
+  it('does not go by the text: an action that answers the same words did answer', () => {
+    expect(sinRespuesta({ ok: false, error: SIN_RESPUESTA })).toBe(false)
   })
 })

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, notExists, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, inArray, notExists, sql, type SQL } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
   almacenes, barcosCache, couriers, sesionCourierBatches, sesionItems, sesionesEscaneo,
@@ -51,6 +51,15 @@ function buscarRecepcion(sesionId: string) {
     columns: { id: true, almacenId: true, barcoOdooId: true, estado: true },
     where: and(eq(sesionesEscaneo.id, sesionId), eq(sesionesEscaneo.tipo, 'recepcion')),
   })
+}
+
+/**
+ * A recepción that is still `en_curso`, as a condition: what the statements that may only touch an open recepción ask,
+ * the write of a scan (`guardarPaquete`) and the lock of the discards (`bloquearAbierta`) among them. One definition,
+ * so that the lock and what it protects always cover the same row.
+ */
+function recepcionAbierta(sesionId: string): SQL {
+  return sql`(${eq(sesionesEscaneo.id, sesionId)} and ${eq(sesionesEscaneo.tipo, 'recepcion')} and ${eq(sesionesEscaneo.estado, 'en_curso')})`
 }
 
 /** Why a recepción cannot be changed: there is none, or it is not `en_curso` any more. */
@@ -117,20 +126,65 @@ async function dondeEstaElCodigo(sesionId: string, codigo: string): Promise<stri
   return `la recepción de ${nombreDeBarco(otra.barcoNombre, otra.barcoOdooId)}`
 }
 
+/** The name of the courier, for the answer to a scan. Undefined when no courier has the id. */
+async function nombreDelCourier(courierId: number): Promise<string | undefined> {
+  const [courier] = await db.select({ nombre: couriers.nombre }).from(couriers).where(eq(couriers.id, courierId))
+  return courier?.nombre
+}
+
+/** A package about to go into a recepción, as `escanearPaquete` decided it. */
+interface PaqueteNuevo {
+  sesionId: string
+  courierId: number
+  trackingNumber: string
+  estado: PaqueteEscaneado['estado']
+  duplicadoRef: string | null
+  operarioId: string
+}
+
 /**
- * The batch of `courierId` in the recepción, created by the first package of that courier. One
- * statement, so two scans of a new courier at once get the same batch. `DO UPDATE` with a SET that
- * changes nothing, instead of `DO NOTHING`, because only that makes RETURNING answer the existing row.
+ * What writing a package found: whether the recepción was still `en_curso`, and the id of the package when it went in
+ * (null when the code was already in its courier batch, or when the recepción was not open).
  */
-async function obtenerTanda(sesionId: string, courierId: number): Promise<string> {
-  const [tanda] = await db.insert(sesionCourierBatches)
-    .values({ sesionId, courierId })
-    .onConflictDoUpdate({
-      target: [sesionCourierBatches.sesionId, sesionCourierBatches.courierId],
-      set: { sesionId },
-    })
-    .returning({ id: sesionCourierBatches.id })
-  return tanda.id
+interface PaqueteGuardado {
+  abierta: boolean
+  paqueteId: string | null
+}
+
+/**
+ * Puts the package in the recepción, in the batch of its courier (made by the first package of that courier), in one
+ * statement, and only while the recepción is `en_curso`.
+ *
+ * The recepción is held `FOR SHARE` until the package is in. A send ("Enviar") is an UPDATE of that row, so one that
+ * arrives meanwhile waits for this to commit, and the worker, which reads the packages after the send, finds the
+ * package; one that got there first leaves the recepción out of `abierta`, and nothing is written. The discards lock
+ * the row first thing too (`bloquearAbierta`), so a discard and a scan wait for each other instead of crossing.
+ *
+ * The batch is an upsert with `DO UPDATE` and a SET that changes nothing, instead of `DO NOTHING`, because only that
+ * makes RETURNING answer the existing row: two scans of a new courier at once get the same batch. The parameters say
+ * their types because an `INSERT ... SELECT` does not take them from the columns.
+ */
+async function guardarPaquete(paquete: PaqueteNuevo): Promise<PaqueteGuardado> {
+  const { rows } = await db.execute<{ abierta: boolean; paquete_id: string | null }>(sql`
+    with abierta as (
+      select ${sesionesEscaneo.id} as id from ${sesionesEscaneo}
+      where ${recepcionAbierta(paquete.sesionId)}
+      for share
+    ), tanda as (
+      insert into ${sesionCourierBatches} (sesion_id, courier_id)
+      select id, ${paquete.courierId}::integer from abierta
+      on conflict (sesion_id, courier_id) do update set sesion_id = excluded.sesion_id
+      returning id
+    ), nuevo as (
+      insert into ${sesionItems} (courier_batch_id, tracking_number, estado, duplicado_ref, operario_id)
+      select id, ${paquete.trackingNumber}::text, ${paquete.estado}::estado_item, ${paquete.duplicadoRef}::text, ${paquete.operarioId}::uuid
+      from tanda
+      on conflict (courier_batch_id, tracking_number) do nothing
+      returning id
+    )
+    select exists (select 1 from abierta) as abierta, (select id from nuevo) as paquete_id
+  `)
+  return { abierta: rows[0].abierta, paqueteId: rows[0].paquete_id }
 }
 
 /**
@@ -139,6 +193,11 @@ async function obtenerTanda(sesionId: string, courierId: number): Promise<string
  * another one on its way to Odoo, is reported as `repetido` and nothing is written; a code Odoo
  * already has goes in as `duplicado` (kept, flagged, never sent); anything else goes in as `ok`.
  * The code is trimmed and not changed in any other way.
+ *
+ * Next runs the actions of a client one after the other, so every scan of a burst of the gun waits for the one
+ * before it, and each round trip to the database is paid once per code. So what the scan has to know is read at once
+ * (none of it depends on the rest), and the package is written in one statement that checks the recepción again
+ * (`guardarPaquete`).
  */
 export async function escanearPaquete(entrada: {
   sesionId: string
@@ -150,41 +209,29 @@ export async function escanearPaquete(entrada: {
   const codigo = entrada.trackingNumber.trim()
   if (codigo === '') throw new EscaneoInvalidoError('El código está vacío.')
 
-  const sesion = await buscarRecepcion(sesionId)
+  const [sesion, donde, duplicado, courierNombre] = await Promise.all([
+    buscarRecepcion(sesionId),
+    dondeEstaElCodigo(sesionId, codigo),
+    buscarDuplicado(codigo),
+    nombreDelCourier(courierId),
+  ])
   if (sesion?.estado !== 'en_curso') throw recepcionNoAbierta(sesion)
-
-  const donde = await dondeEstaElCodigo(sesionId, codigo)
   if (donde) return { tipo: 'repetido', trackingNumber: codigo, donde }
+  // An id that names no courier: nothing is written, and the operario gets the generic message.
+  if (courierNombre === undefined) throw new Error(`No courier has the id ${courierId}`)
 
-  const duplicado = await buscarDuplicado(codigo)
   const estado = duplicado ? 'duplicado' : 'ok'
   const duplicadoRef = duplicado?.odooPickingRef ?? null
-
-  const tandaId = await obtenerTanda(sesionId, courierId)
-  const [insertado] = await db.insert(sesionItems)
-    .values({ courierBatchId: tandaId, trackingNumber: codigo, estado, duplicadoRef, operarioId })
-    .onConflictDoNothing()
-    .returning({ id: sesionItems.id })
+  const guardado = await guardarPaquete({ sesionId, courierId, trackingNumber: codigo, estado, duplicadoRef, operarioId })
+  // The recepción was sent or discarded while this scan was being checked, and the package did not go in. It is read
+  // once more to say which.
+  if (!guardado.abierta) throw recepcionNoAbierta(await buscarRecepcion(sesionId))
   // The same code reached this recepción between the check above and the insert.
-  if (!insertado) return { tipo: 'repetido', trackingNumber: codigo, donde: 'esta recepción' }
-
-  // The recepción may have been sent while this scan was being checked, and the worker reads the packages
-  // some time after the send: one that got in late may or may not be read. So look again, now that the
-  // package is in. If the recepción is still open, any send comes after the insert and the worker will
-  // read it; if not, take the package back out and refuse it, instead of showing as added one that may
-  // never reach Odoo.
-  const [courier, actual] = await Promise.all([
-    db.select({ nombre: couriers.nombre }).from(couriers).where(eq(couriers.id, courierId)).then((filas) => filas[0]),
-    buscarRecepcion(sesionId),
-  ])
-  if (actual?.estado !== 'en_curso') {
-    await db.delete(sesionItems).where(eq(sesionItems.id, insertado.id))
-    throw recepcionNoAbierta(actual)
-  }
+  if (guardado.paqueteId === null) return { tipo: 'repetido', trackingNumber: codigo, donde: 'esta recepción' }
 
   return {
     tipo: 'agregado',
-    paquete: { id: insertado.id, trackingNumber: codigo, courierId, courierNombre: courier.nombre, estado, duplicadoRef },
+    paquete: { id: guardado.paqueteId, trackingNumber: codigo, courierId, courierNombre, estado, duplicadoRef },
   }
 }
 
@@ -201,6 +248,15 @@ function tandasAbiertas(sesionId?: string) {
       eq(sesionesEscaneo.estado, 'en_curso'),
       sesionId === undefined ? undefined : eq(sesionesEscaneo.id, sesionId),
     ))
+}
+
+/**
+ * The first statement of a discard's batch: the recepción, locked FOR UPDATE while it is `en_curso`. A scan holds the
+ * same row FOR SHARE while it writes (`guardarPaquete`), so the two take that row first and one waits for the other,
+ * instead of each holding something the other needs.
+ */
+function bloquearAbierta(sesionId: string) {
+  return db.select({ id: sesionesEscaneo.id }).from(sesionesEscaneo).where(recepcionAbierta(sesionId)).for('update')
 }
 
 /** How many packages the recepción has: the `ok` ones, which are sent, and the `duplicado` ones, which are not. */
@@ -237,21 +293,20 @@ export async function borrarPaquete(itemId: string): Promise<void> {
  */
 export async function descartarRecepcion(entrada: { sesionId: string; operarioId: string }): Promise<void> {
   const { sesionId, operarioId } = entrada
-  const sesion = await buscarRecepcion(sesionId)
+  const [sesion, { validos, duplicados }] = await Promise.all([buscarRecepcion(sesionId), contarPaquetes(sesionId)])
   if (!sesion) return
   if (sesion.estado !== 'en_curso') throw new RecepcionCerradaError()
 
-  const { validos, duplicados } = await contarPaquetes(sesionId)
-
-  // A batch, so that on neon-http (no transactions) it is one transaction and never half done. Every
-  // statement reaches the recepción only while it is `en_curso`: if it was sent after the check above,
-  // none of them touches it, and the last one, which says what it deleted, is how that is noticed.
-  const [, , borradas] = await db.batch([
+  // A batch, so that on neon-http (no transactions) it is one transaction and never half done. It locks the
+  // recepción first (`bloquearAbierta`): a scan that is writing finishes before the deletes look, and one that
+  // comes later finds the recepción gone. Every statement reaches the recepción only while it is `en_curso`: if it
+  // was sent after the check above, none of them touches it, and the last one, which says what it deleted, is how
+  // that is noticed.
+  const [, , , borradas] = await db.batch([
+    bloquearAbierta(sesionId),
     db.delete(sesionItems).where(inArray(sesionItems.courierBatchId, tandasAbiertas(sesionId))),
     db.delete(sesionCourierBatches).where(inArray(sesionCourierBatches.id, tandasAbiertas(sesionId))),
-    db.delete(sesionesEscaneo)
-      .where(and(eq(sesionesEscaneo.id, sesionId), eq(sesionesEscaneo.estado, 'en_curso')))
-      .returning({ id: sesionesEscaneo.id }),
+    db.delete(sesionesEscaneo).where(recepcionAbierta(sesionId)).returning({ id: sesionesEscaneo.id }),
   ])
   if (borradas.length === 0) throw new RecepcionCerradaError()
 
@@ -267,20 +322,18 @@ export async function descartarRecepcion(entrada: { sesionId: string; operarioId
  * cleanup for one that merely looks empty (an operario leaves it, "Enviar" finds nothing in it),
  * which can be a screen that is out of date: a package scanned meanwhile must not go with it, as it
  * would with `descartarRecepcion`, which deletes whatever is inside. So emptiness is decided by the
- * statements that delete, in one `db.batch`: first the courier batches with no package go, then the
- * recepción goes if none of its batches is left; both only while it is a `recepcion` in `en_curso`.
- * A scan that lands in the middle either finds the recepción alive or fails against a foreign key:
- * nothing is lost without somebody knowing. False: it has a package, or it was sent, or it is gone.
+ * statements that delete, in one `db.batch`: first the recepción is locked (`bloquearAbierta`), then
+ * the courier batches with no package go, then the recepción goes if none of its batches is left; all
+ * only while it is a `recepcion` in `en_curso`. A scan that is writing finishes before the deletes look,
+ * and keeps the recepción; one that comes later finds it gone and says so: nothing is lost without
+ * somebody knowing. False: it has a package, or it was sent, or it is gone.
  */
 export async function descartarSiVacia(entrada: { sesionId: string; operarioId: string }): Promise<boolean> {
   const { sesionId, operarioId } = entrada
-  const abierta = and(
-    eq(sesionesEscaneo.id, sesionId),
-    eq(sesionesEscaneo.tipo, 'recepcion'),
-    eq(sesionesEscaneo.estado, 'en_curso'),
-  )
+  const abierta = recepcionAbierta(sesionId)
 
-  const [, borradas] = await db.batch([
+  const [, , borradas] = await db.batch([
+    bloquearAbierta(sesionId),
     db.delete(sesionCourierBatches).where(and(
       inArray(sesionCourierBatches.sesionId, db.select({ id: sesionesEscaneo.id }).from(sesionesEscaneo).where(abierta)),
       notExists(db.select({ uno: sql`1` }).from(sesionItems).where(eq(sesionItems.courierBatchId, sesionCourierBatches.id))),
@@ -347,10 +400,9 @@ async function enviar(
   opciones: { descartarSiEstaVacia: boolean },
 ): Promise<ResultadoEnvio> {
   const { sesionId, operarioId } = entrada
-  const sesion = await buscarRecepcion(sesionId)
+  const [sesion, { validos, duplicados }] = await Promise.all([buscarRecepcion(sesionId), contarPaquetes(sesionId)])
   if (sesion?.estado !== 'en_curso') throw recepcionNoAbierta(sesion)
 
-  const { validos, duplicados } = await contarPaquetes(sesionId)
   if (validos + duplicados === 0 && opciones.descartarSiEstaVacia) {
     if (await descartarSiVacia(entrada)) return 'vacia_descartada'
     return enviar(entrada, { descartarSiEstaVacia: false })

@@ -88,7 +88,7 @@ function ejecuta(modelo: string, metodo: string, params: Record<string, unknown>
       if (odoo.respuestaDeValidar === true || odoo.validaAunqueResponda) odoo.estadoDelPicking = 'done'
       return odoo.respuestaDeValidar
     }
-    return true // action_confirm, action_assign, message_post, write
+    return true // message_post, write
   }
   if (modelo === 'stock.move') {
     if (metodo === 'create') {
@@ -98,6 +98,12 @@ function ejecuta(modelo: string, metodo: string, params: Record<string, unknown>
           id, picking_id: fila.picking_id as number, product_id: fila.product_id as number,
           product_uom_qty: fila.product_uom_qty as number, state: 'draft',
         })
+        // The lines that come with the move, as create commands `[0, 0, vals]`: made with it, and on it.
+        for (const [, , linea] of (fila.move_line_ids ?? []) as Array<[number, number, Record<string, unknown>]>) {
+          odoo.lineas.push({
+            id: odoo.siguienteId++, move_id: id, picking_id: linea.picking_id as number, lot_name: linea.lot_name as string,
+          })
+        }
         return id
       })
     }
@@ -173,15 +179,15 @@ const lotsDeLaLinea = () => odoo.lineas.map((l) => l.lot_name).sort()
 const falla = (sesionId: string, error: unknown, reintentosHechos = 0) =>
   registrarFalloSync({ sesionId, error, reintentosHechos })
 
-describe('a retry after the lines of a move failed to arrive', () => {
-  it('leaves exactly one move, with all its lines, when the call that creates the lines failed', async () => {
+describe('a retry after the call that makes a move and its lines failed', () => {
+  it('leaves exactly one move, with all its lines, when that call failed before Odoo did anything', async () => {
     const sesion = await crearRecepcion(['T1', 'T2'])
-    odoo.fallo = { modelo: 'stock.move.line', metodo: 'create', despues: false }
+    odoo.fallo = { modelo: 'stock.move', metodo: 'create', despues: false }
 
     const error = await syncRecepcionSession(sesion.id).catch((e) => e)
     expect(error).toBeInstanceOf(OdooError)
     expect((await falla(sesion.id, error)).final).toBe(false) // a gateway timeout: QStash retries it
-    expect(odoo.movimientos).toHaveLength(1) // the move is there, still without its lines
+    expect(odoo.movimientos).toHaveLength(0)
     expect(odoo.lineas).toHaveLength(0)
 
     await syncRecepcionSession(sesion.id)
@@ -194,27 +200,13 @@ describe('a retry after the lines of a move failed to arrive', () => {
     expect(await filaSesion(sesion.id)).toMatchObject({ estado: 'sincronizada', ultimoError: null, ultimoErrorTipo: null })
   })
 
-  it('does not create the lines twice when the call that creates them answered too late but did create them', async () => {
-    const sesion = await crearRecepcion(['T1', 'T2'])
-    odoo.fallo = { modelo: 'stock.move.line', metodo: 'create', despues: true }
-
-    await expect(syncRecepcionSession(sesion.id)).rejects.toBeInstanceOf(OdooError)
-    expect(odoo.lineas).toHaveLength(2)
-
-    await syncRecepcionSession(sesion.id)
-
-    expect(odoo.movimientos).toHaveLength(1)
-    expect(lotsDeLaLinea()).toEqual(['T1', 'T2'])
-    expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
-  })
-
-  it('does not create a second move when the call that creates the move answered too late but did create it', async () => {
+  it('makes neither the move nor its lines twice when that call answered too late but had made them', async () => {
     const sesion = await crearRecepcion(['T1', 'T2'])
     odoo.fallo = { modelo: 'stock.move', metodo: 'create', despues: true }
 
     await expect(syncRecepcionSession(sesion.id)).rejects.toBeInstanceOf(OdooError)
     expect(odoo.movimientos).toHaveLength(1)
-    expect(odoo.lineas).toHaveLength(0)
+    expect(odoo.lineas).toHaveLength(2) // the move came with its lines: one request made both
 
     await syncRecepcionSession(sesion.id)
 
@@ -223,9 +215,24 @@ describe('a retry after the lines of a move failed to arrive', () => {
     expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
   })
 
+  it('gives all its lines to a move that an earlier version of the webapp left without them', async () => {
+    // Before the lines came with the move, an attempt could be cut between the two requests.
+    const sesion = await crearRecepcion(['T1', 'T2'])
+    odoo.pickingId = 900
+    odoo.movimientos.push({ id: 901, picking_id: 900, product_id: 11, product_uom_qty: 2, state: 'draft' })
+    await db.update(sesionesEscaneo).set({ odooPickingId: 900 }).where(eq(sesionesEscaneo.id, sesion.id))
+
+    await syncRecepcionSession(sesion.id)
+
+    expect(odoo.movimientos).toHaveLength(1)
+    expect(lotsDeLaLinea()).toEqual(['T1', 'T2'])
+    expect(odoo.lineas.every((l) => l.move_id === 901)).toBe(true)
+    expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
+  })
+
   it('records the move on its courier batch and the packages as synced once the retry gets through', async () => {
     const sesion = await crearRecepcion(['T1'])
-    odoo.fallo = { modelo: 'stock.move.line', metodo: 'create', despues: false }
+    odoo.fallo = { modelo: 'stock.move', metodo: 'create', despues: false }
     await expect(syncRecepcionSession(sesion.id)).rejects.toBeInstanceOf(OdooError)
 
     await syncRecepcionSession(sesion.id)

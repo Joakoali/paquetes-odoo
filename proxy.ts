@@ -16,12 +16,19 @@ export function proxy(request: NextRequest): NextResponse {
   return NextResponse.redirect(login)
 }
 
+/**
+ * The screens of the app, but not the Server Actions called on them (a POST to the screen with a `next-action`
+ * header). Every action authenticates by itself, and a scan is one of them: going through the proxy only added a step
+ * to every code of the gun, and the redirect it answers without a cookie reached the screen as "no answer" instead of
+ * the expired-session message the action gives. Each entry is written out whole because Next reads the matcher at
+ * build time and ignores whatever comes from a variable.
+ */
 export const config = {
   matcher: [
-    '/admin',
-    '/admin/:path*',
-    '/recepcion/:path*',
-    '/entrega/:path*',
-    '/pendientes/:path*',
+    { source: '/admin', missing: [{ type: 'header', key: 'next-action' }] },
+    { source: '/admin/:path*', missing: [{ type: 'header', key: 'next-action' }] },
+    { source: '/recepcion/:path*', missing: [{ type: 'header', key: 'next-action' }] },
+    { source: '/entrega/:path*', missing: [{ type: 'header', key: 'next-action' }] },
+    { source: '/pendientes/:path*', missing: [{ type: 'header', key: 'next-action' }] },
   ],
 }

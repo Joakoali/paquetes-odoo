@@ -102,6 +102,17 @@ export const sesionesEscaneo = pgTable('sesiones_escaneo', {
   recepcionAbiertaUnica: uniqueIndex('sesiones_recepcion_abierta_unica')
     .on(t.almacenId, t.barcoOdooId)
     .where(sql`tipo = 'recepcion' and estado = 'en_curso'`),
+  // What was sent today in an almacén (Enviadas hoy, Entregadas hoy): its recepciones or its entregas, from 00:00 on.
+  // Without it, every render of those homes reads every sesión ever made.
+  enviadasPorAlmacen: index('sesiones_escaneo_almacen_tipo_confirmed_at_idx').on(t.almacenId, t.tipo, t.confirmedAt),
+  // What is waiting for the worker, a handful at any time: the entregas of a barco on their way to Odoo, which the
+  // delivery screens must not offer again (`moveLineIdsRetenidas`). That query sends the estado as a parameter, and
+  // Postgres matches it to this predicate when it plans the query with its values (a custom plan, checked with EXPLAIN
+  // on Postgres 16); a generic plan, which only a prepared statement reused on a connection gets, would fall back to
+  // the index above. `esDuplicadoSinRevisar` writes its condition with no parameter, so it does not depend on that.
+  esperandoSync: index('sesiones_escaneo_esperando_sync_idx')
+    .on(t.almacenId, t.barcoOdooId)
+    .where(sql`estado = 'confirmada_pendiente_sync'`),
 }))
 
 export const sesionCourierBatches = pgTable('sesion_courier_batches', {
@@ -129,6 +140,9 @@ export const sesionItems = pgTable('sesion_items', {
   // The check of whether a code is already in a recepción that is not in Odoo yet asks for the tracking number
   // alone, once per scan: the unique index above starts with the courier batch and does not serve it.
   trackingNumberIdx: index('sesion_items_tracking_number_idx').on(t.trackingNumber),
+  // The packages left out because Odoo already had them when they were sent: a handful. Pendientes asks for them on
+  // every render of the app, for the number on its tab (`esDuplicadoSinRevisar`).
+  dejadosAfueraAlEnviar: index('sesion_items_duplicado_al_enviar_idx').on(t.courierBatchId).where(sql`duplicado_al_enviar`),
 }))
 
 export const trackingActivosCache = pgTable('tracking_activos_cache', {

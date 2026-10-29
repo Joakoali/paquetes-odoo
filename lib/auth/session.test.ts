@@ -1,38 +1,58 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const dbState = { auth: [] as any[], operarios: [] as any[] }
+vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/test-db')).createTestDb() }))
 
-vi.mock('../../db/client', () => ({
-  db: {
-    insert: () => ({
-      values: (v: any) => {
-        const row = { id: 'session-1', ...v }
-        dbState.auth.push(row)
-        return { returning: async () => [row] }
-      },
-    }),
-    query: {
-      sesionesAuth: {
-        findFirst: async ({ where }: any) =>
-          dbState.auth.find((r) => where(r, { eq: (a: any, b: any) => a === b })) ?? undefined,
-      },
-    },
-    delete: () => ({ where: async () => { dbState.auth = [] } }),
-  },
-}))
+import { eq } from 'drizzle-orm'
+import { db } from '@/db/client'
+import { operarios, sesionesAuth, type Operario } from '@/db/schema'
+import { seedOperario } from '@/lib/testing/seed'
+import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
+import { createSession, destroySession, getSessionOperario } from './session'
 
-import { createSession, getSessionOperario, destroySession } from './session'
+const NO_EXISTE = '00000000-0000-4000-8000-000000000000'
 
-beforeEach(() => {
-  dbState.auth = []
-  dbState.operarios = [{ id: 'op-1', nombre: 'Juan', login: 'juan', rol: 'operario', activo: true }]
+let juan: Operario
+
+beforeEach(async () => {
+  await resetTestDb(db as unknown as TestDb)
+  juan = await seedOperario(db, { nombre: 'Juan' })
 })
 
 describe('session', () => {
-  it('creates a session and can be destroyed', async () => {
-    const token = await createSession('op-1')
-    expect(typeof token).toBe('string')
+  it('creates a session that names its operario, and can be destroyed', async () => {
+    const token = await createSession(juan.id)
+    expect(await getSessionOperario(token)).toEqual(juan)
+
     await destroySession(token)
-    expect(dbState.auth.length).toBe(0)
+
+    expect(await getSessionOperario(token)).toBeNull()
+  })
+})
+
+describe('getSessionOperario', () => {
+  it('answers null for a session that has expired', async () => {
+    const [vencida] = await db.insert(sesionesAuth)
+      .values({ operarioId: juan.id, expiresAt: new Date(Date.now() - 1000) })
+      .returning()
+
+    expect(await getSessionOperario(vencida.id)).toBeNull()
+  })
+
+  it('answers null for the session of an operario who was deactivated since', async () => {
+    const token = await createSession(juan.id)
+    await db.update(operarios).set({ activo: false }).where(eq(operarios.id, juan.id))
+
+    expect(await getSessionOperario(token)).toBeNull()
+  })
+
+  it('answers null for a token that names no session', async () => {
+    expect(await getSessionOperario(NO_EXISTE)).toBeNull()
+  })
+
+  it('answers the operario of the session, not another one', async () => {
+    const ana = await seedOperario(db, { nombre: 'Ana' })
+    await createSession(juan.id)
+
+    expect(await getSessionOperario(await createSession(ana.id))).toEqual(ana)
   })
 })

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/db/client', () => ({
   db: new Proxy({}, { get: () => { throw new Error('This test must not touch the database') } }),
 }))
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
+vi.mock('next/cache', () => ({ refresh: vi.fn(), revalidatePath: vi.fn() }))
 vi.mock('@/lib/auth/current-operario', () => ({ requireOperarioFromCookies: vi.fn() }))
 vi.mock('@/lib/almacen-activo', () => ({ requireAlmacenActivo: vi.fn() }))
 vi.mock('@/lib/entrega/entregas', () => ({ registrarEntrega: vi.fn(), entregaGuardada: vi.fn(), moveLineIdsRetenidas: vi.fn() }))
@@ -13,7 +13,7 @@ vi.mock('@/lib/entrega/entregas', () => ({ registrarEntrega: vi.fn(), entregaGua
 vi.mock('@/lib/odoo/pickings', () => ({ getLineasEntregaPendiente: vi.fn() }))
 vi.mock('@/lib/recepcion/recepciones', () => ({ enviarRecepcionesAbiertas: vi.fn() }))
 
-import { revalidatePath } from 'next/cache'
+import { refresh, revalidatePath } from 'next/cache'
 import type { Almacen, Operario } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
@@ -411,6 +411,14 @@ describe('enviarRecepcionesDelBarcoAction', () => {
     expect(revalidatePath).toHaveBeenCalledWith('/recepcion')
   })
 
+  it('draws the barco it is called from again in its answer, since the screen does not ask for it again', async () => {
+    vi.mocked(enviarRecepcionesAbiertas).mockResolvedValue(1)
+
+    await enviarRecepcionesDelBarcoAction(673)
+
+    expect(refresh).toHaveBeenCalledOnce()
+  })
+
   it('revalidates also when it stops halfway: the recepciones sent before the failure are not open any more', async () => {
     const consola = silenciarConsoleError()
     vi.mocked(enviarRecepcionesAbiertas).mockRejectedValue(new Error('QStash is disabled'))
@@ -420,6 +428,7 @@ describe('enviarRecepcionesDelBarcoAction', () => {
     expect(consola).toHaveBeenCalled()
     expect(revalidatePath).toHaveBeenCalledWith('/entrega')
     expect(revalidatePath).toHaveBeenCalledWith('/recepcion')
+    expect(refresh).toHaveBeenCalledOnce()
   })
 
   it('answers with the expired-session message, and sends nothing, when there is no session', async () => {
