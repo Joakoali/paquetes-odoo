@@ -67,7 +67,24 @@ export async function createIncomingPicking(almacenPickingTypeId: number, barcoO
   return firstId(res)
 }
 
+/** Where the lines of a courier's move go: the picking, and the product that is the courier. */
+interface DestinoDeLineas {
+  pickingId: number
+  courierProductId: number
+}
+
 /** The lines of a move, one per package: the tracking number goes in `lot_name`, and Odoo makes the lot when it validates. */
+function lineasDelMovimiento(destino: DestinoDeLineas, trackingNumbers: string[]) {
+  return trackingNumbers.map((lot_name) => ({
+    picking_id: destino.pickingId,
+    product_id: destino.courierProductId,
+    lot_name,
+    quantity: 1,
+    picked: true,
+  }))
+}
+
+/** The lines a move that is already there lacks, made on it. */
 async function createMoveLines(
   moveId: number,
   pickingId: number,
@@ -75,14 +92,7 @@ async function createMoveLines(
   trackingNumbers: string[],
 ): Promise<void> {
   await odooCall<number[]>('stock.move.line', 'create', {
-    vals_list: trackingNumbers.map((lot_name) => ({
-      move_id: moveId,
-      picking_id: pickingId,
-      product_id: courierProductId,
-      lot_name,
-      quantity: 1,
-      picked: true,
-    })),
+    vals_list: lineasDelMovimiento({ pickingId, courierProductId }, trackingNumbers).map((linea) => ({ move_id: moveId, ...linea })),
   })
 }
 
@@ -99,6 +109,9 @@ export async function addCourierMoveWithLines(
   // pass the picking's own locations explicitly or Odoo raises a NotNullViolation.
   // `picked` lives on both stock.move and stock.move.line here — set it on both so
   // button_validate has nothing to ask.
+  // The lines go in the same request, as create commands of `move_line_ids`: the move and its lines are made
+  // together, so a first attempt can no longer leave a move without lines, and each courier costs one request (one
+  // second, with the throttle) instead of two.
   const res = await odooCall<number | number[]>('stock.move', 'create', {
     vals_list: [{
       picking_id: pickingId,
@@ -108,13 +121,10 @@ export async function addCourierMoveWithLines(
       location_id: locationId,
       location_dest_id: locationDestId,
       picked: true,
+      move_line_ids: lineasDelMovimiento({ pickingId, courierProductId }, trackingNumbers).map((linea) => [0, 0, linea]),
     }],
   })
-  const moveId = firstId(res)
-
-  await createMoveLines(moveId, pickingId, courierProductId, trackingNumbers)
-
-  return moveId
+  return firstId(res)
 }
 
 /** A line of a move as `search_read` returns it, for the ones that are already there. */
@@ -127,7 +137,8 @@ interface LineaDeMovimientoRead {
  * `addCourierMoveWithLines` for a picking that an earlier attempt may already have worked on. It looks at what
  * the picking has for the courier before making anything, so a retry never leaves a second move, nor a move
  * without its lines. A call that fails with a timeout or a 5xx fails the same way whether Odoo did the work or
- * not, so an attempt cut after the move, or after the lines, has to be picked up where it stopped:
+ * not, so an attempt has to be picked up where it stopped (the move and its lines are made in one request now,
+ * but a picking left by an earlier version of the webapp can have a move without its lines):
  *
  * - no move of the courier on the picking: the whole of `addCourierMoveWithLines`;
  * - the move is there: only the lines it lacks are made (none, when it has them all).
@@ -205,12 +216,14 @@ async function confirmarQueQuedoValidado(pickingId: number, respuesta: unknown):
 }
 
 /**
- * Confirms, reserves and validates the picking. Odoo answers `true` when the picking is done, and then nothing
- * else is asked of it. For any other answer see `confirmarQueQuedoValidado`: the picking may be done all the same.
+ * Validates the picking with `button_validate` alone. Since Odoo 17 it confirms a picking that is still a draft
+ * before validating it, and the moves of a reception, which come from the vendor, are available as soon as they are
+ * confirmed: confirming and reserving it apart, first, cost two requests (two seconds, with the throttle) on every
+ * recepción. Odoo answers `true` when the picking is done, and then nothing else is asked of it. For any other answer
+ * see `confirmarQueQuedoValidado`: the picking may be done all the same, and if it is not, that is an error and not a
+ * synced recepción.
  */
 export async function validatePicking(pickingId: number): Promise<void> {
-  await odooCall('stock.picking', 'action_confirm', { ids: [pickingId] })
-  await odooCall('stock.picking', 'action_assign', { ids: [pickingId] })
   const res = await odooCall<unknown>('stock.picking', 'button_validate', { ids: [pickingId] })
   if (res !== true) await confirmarQueQuedoValidado(pickingId, res)
 }
