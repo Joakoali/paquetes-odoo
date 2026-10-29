@@ -1,4 +1,4 @@
-import { and, asc, count, eq, exists, inArray, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, asc, count, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import { db } from '../../db/client'
 import {
   almacenes, barcosCache, operarios, sesionCourierBatches, sesionItems, sesionesEscaneo,
@@ -84,15 +84,22 @@ function tipoDeProblema(estado: SesionEscaneo['estado']): TipoProblema {
  *
  * As a WHERE, for the list, the count and the review at once, so that what is listed and what can be reviewed
  * are the same thing and can never disagree: a review can only be set on a sesión that is a duplicado now.
+ *
+ * The sesiones with a package left out are found once, as a list (a handful, through the partial index on
+ * `duplicado_al_enviar`), and not with an EXISTS that names the sesión, which would look into the packages of every
+ * synced sesión ever made: the number on the tab is counted on every render of the app. The column goes bare, with no
+ * parameter, so that the partial index applies however the query is planned.
  */
 function esDuplicadoSinRevisar() {
-  const conPaqueteDejadoAfuera = exists(
-    db.select({ uno: sql`1` })
-      .from(sesionCourierBatches)
-      .innerJoin(sesionItems, eq(sesionItems.courierBatchId, sesionCourierBatches.id))
-      .where(and(eq(sesionCourierBatches.sesionId, sesionesEscaneo.id), eq(sesionItems.duplicadoAlEnviar, true))),
+  const conPaqueteDejadoAfuera = db.select({ sesionId: sesionCourierBatches.sesionId })
+    .from(sesionItems)
+    .innerJoin(sesionCourierBatches, eq(sesionCourierBatches.id, sesionItems.courierBatchId))
+    .where(sql`${sesionItems.duplicadoAlEnviar}`)
+  return and(
+    eq(sesionesEscaneo.estado, 'sincronizada'),
+    inArray(sesionesEscaneo.id, conPaqueteDejadoAfuera),
+    isNull(sesionesEscaneo.revisadoAt),
   )
-  return and(eq(sesionesEscaneo.estado, 'sincronizada'), conPaqueteDejadoAfuera, isNull(sesionesEscaneo.revisadoAt))
 }
 
 /**

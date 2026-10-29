@@ -1,0 +1,3 @@
+CREATE INDEX "sesion_items_duplicado_al_enviar_idx" ON "sesion_items" USING btree ("courier_batch_id") WHERE duplicado_al_enviar;--> statement-breakpoint
+CREATE INDEX "sesiones_escaneo_almacen_tipo_confirmed_at_idx" ON "sesiones_escaneo" USING btree ("almacen_id","tipo","confirmed_at");--> statement-breakpoint
+CREATE INDEX "sesiones_escaneo_esperando_sync_idx" ON "sesiones_escaneo" USING btree ("almacen_id","barco_odoo_id") WHERE estado = 'confirmada_pendiente_sync';
