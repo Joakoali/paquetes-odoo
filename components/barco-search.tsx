@@ -24,13 +24,15 @@ import { SIN_RESPUESTA } from '@/lib/ui/textoDeFallo'
  * With `buscarComoTracking`, what no barco is called is offered to be searched as a tracking number: what was typed may
  * be one. Not where a barco is all that can be chosen (the dialog that holds a code of the gun).
  */
-export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabilitado = false, buscarComoTracking = false }: {
+export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabilitado = false, buscarComoTracking = false, excluir }: {
   onElegir: (barco: BarcoOpcion) => void
   placeholder: string
   autoFocus?: boolean
   /** While what a choice started is still running: the results are not pressed twice. */
   deshabilitado?: boolean
   buscarComoTracking?: boolean
+  /** The Odoo id of a barco that is not offered: the one the packages are on, when they are moved to another. */
+  excluir?: number
 }) {
   const [texto, setTexto] = useState('')
   const [barcos, setBarcos] = useState<BarcoOpcion[] | null>(null)
@@ -59,7 +61,7 @@ export function BarcoSearch({ onElegir, placeholder, autoFocus = false, deshabil
       return
     }
     if (!pedidos.esVigente(pedido)) return
-    setBarcos(encontrados)
+    setBarcos(encontrados.filter((barco) => barco.odooId !== excluir))
     setFallo(null)
     setBuscando(false)
   }

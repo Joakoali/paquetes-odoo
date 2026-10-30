@@ -46,3 +46,15 @@ export async function searchBarcos(query: string): Promise<BarcoOpcion[]> {
   const etiquetas = etiquetasDeBarcos(filas)
   return filas.map(({ odooId, nombre }, posicion) => ({ odooId, nombre, etiqueta: etiquetas[posicion] }))
 }
+
+/**
+ * Whether the barco is one the search of barcos offers (active in the cache): the only ones an operario can choose, and so
+ * the only ones a request from a phone may name.
+ */
+export async function barcoActivo(odooId: number): Promise<boolean> {
+  const barco = await db.query.barcosCache.findFirst({
+    columns: { odooId: true },
+    where: and(eq(barcosCache.odooId, odooId), eq(barcosCache.activo, true)),
+  })
+  return barco !== undefined
+}

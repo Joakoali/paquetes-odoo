@@ -5,7 +5,8 @@ import {
 } from 'drizzle-orm/pg-core'
 
 export const rolEnum = pgEnum('rol', ['operario', 'admin'])
-export const tipoSesionEnum = pgEnum('tipo_sesion', ['recepcion', 'entrega'])
+// A `reasignacion` moves packages that wait for delivery from the barco they were received for to another one.
+export const tipoSesionEnum = pgEnum('tipo_sesion', ['recepcion', 'entrega', 'reasignacion'])
 export const estadoSesionEnum = pgEnum('estado_sesion', [
   'en_curso', 'confirmada_pendiente_sync', 'sincronizada', 'error',
 ])
@@ -14,8 +15,8 @@ export const estadoItemEnum = pgEnum('estado_item', [
 ])
 export const errorTipoEnum = pgEnum('error_tipo', ['configuracion', 'odoo', 'conexion'])
 
-/** A package an entrega handed over, as Odoo listed it when the entrega was confirmed. */
-export interface PaqueteEntregado {
+/** A package an entrega handed over or a reasignación moved, as Odoo listed it when it was confirmed. */
+export interface PaqueteDeOdoo {
   /** Null for a line without lot: a product that is not tracked by serial number has no package number. */
   trackingNumber: string | null
   /** The product of the line, which is the courier. */
@@ -88,7 +89,10 @@ export const sesionesEscaneo = pgTable('sesiones_escaneo', {
   id: uuid('id').primaryKey().defaultRandom(),
   operarioId: uuid('operario_id').notNull().references(() => operarios.id),
   almacenId: integer('almacen_id').notNull().references(() => almacenes.id),
+  // For a reasignación, the barco the packages are taken from: the one whose delivery screen it was made on.
   barcoOdooId: integer('barco_odoo_id').notNull(),
+  // The barco a reasignación moves the packages to. Null for anything else.
+  barcoDestinoOdooId: integer('barco_destino_odoo_id'),
   tipo: tipoSesionEnum('tipo').notNull(),
   estado: estadoSesionEnum('estado').notNull().default('en_curso'),
   odooPickingId: integer('odoo_picking_id'),
@@ -96,9 +100,10 @@ export const sesionesEscaneo = pgTable('sesiones_escaneo', {
   odooPickingRef: text('odoo_picking_ref'),
   receptorNombre: text('receptor_nombre'),
   odooMoveLineIds: jsonb('odoo_move_line_ids').$type<number[]>(),
-  // What the move lines of an entrega were: the only place the webapp keeps which packages it handed over, which Pendientes
-  // and the search of a package read. Null for a recepción, and for an entrega confirmed before it was kept.
-  paquetesEntrega: jsonb('paquetes_entrega').$type<PaqueteEntregado[]>(),
+  // What the move lines of an entrega or a reasignación were: the only place the webapp keeps which packages it handed over
+  // or moved, which Pendientes and the search of a package read. Null for a recepción, and for an entrega confirmed before
+  // it was kept. The column kept its name from when only entregas had it: only the TS property is renamed.
+  paquetesDeOdoo: jsonb('paquetes_entrega').$type<PaqueteDeOdoo[]>(),
   firmaData: text('firma_data'),
   intentos: integer('intentos').notNull().default(0),
   ultimoError: text('ultimo_error'),
@@ -118,8 +123,8 @@ export const sesionesEscaneo = pgTable('sesiones_escaneo', {
   // What was sent today in an almacén (Enviadas hoy, Entregadas hoy): its recepciones or its entregas, from 00:00 on.
   // Without it, every render of those homes reads every sesión ever made.
   enviadasPorAlmacen: index('sesiones_escaneo_almacen_tipo_confirmed_at_idx').on(t.almacenId, t.tipo, t.confirmedAt),
-  // What is waiting for the worker, a handful at any time: the entregas of a barco on their way to Odoo, which the
-  // delivery screens must not offer again (`moveLineIdsRetenidas`). That query sends the estado as a parameter, and
+  // What is waiting for the worker, a handful at any time: the entregas and reasignaciones of a barco on their way to Odoo,
+  // whose packages the delivery screens must not offer again (`lineasRetenidas`). That query sends the estado as a parameter, and
   // Postgres matches it to this predicate when it plans the query with its values (a custom plan, checked with EXPLAIN
   // on Postgres 16); a generic plan, which only a prepared statement reused on a connection gets, would fall back to
   // the index above. `esDuplicadoSinRevisar` writes its condition with no parameter, so it does not depend on that.

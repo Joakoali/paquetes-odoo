@@ -6,6 +6,7 @@ export type AccionAuditoria =
   | 'recepcion_enviada'
   | 'recepcion_descartada'
   | 'entrega_confirmada'
+  | 'reasignacion_confirmada'
   | 'sync_ok'
   | 'sync_error'
   | 'reintento'

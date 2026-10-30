@@ -1,13 +1,14 @@
 import { and, asc, eq, gte, inArray, ne } from 'drizzle-orm'
 import { db } from '../../db/client'
-import { barcosCache, sesionesEscaneo, type Almacen, type PaqueteEntregado, type SesionEscaneo } from '../../db/schema'
-import { registrarAuditoria } from '../audit'
+import { barcosCache, sesionesEscaneo, type Almacen, type PaqueteDeOdoo, type SesionEscaneo } from '../../db/schema'
+import { registrarAuditoria, type AccionAuditoria } from '../audit'
 import { etiquetasDeBarcos } from '../cache/barcos'
 import { ConfiguracionError } from '../errores'
 import { inicioDeHoy } from '../fechas'
 import { getBarcosConEntregaPendiente } from '../odoo/pickings'
 import { publishSync } from '../queue/publish'
 import { contarSinEnviarPorBarco } from '../recepcion/recepciones'
+import type { Retencion } from './lineas'
 
 /**
  * What a barco is called: its name in the cache, or, for one the cache does not know (created in Odoo since the last
@@ -99,57 +100,39 @@ export async function listarBarcosParaEntregar(almacen: Pick<Almacen, 'id' | 'od
 /** The `data:image/png;base64,` that a canvas puts in front of the image: Odoo's `signature` wants what comes after it. */
 const PREFIJO_DATA_URL = /^data:[^,]*;base64,/i
 
+/** The kinds of sesión the phone confirms with an id it made up: what `guardarYEncolar` and `sesionGuardada` take. */
+export type TipoConfirmadoEnElMovil = 'entrega' | 'reasignacion'
+
+/** A sesión the phone confirmed, as it is saved: with the id the phone made up, and of a kind it confirms. */
+export type SesionConfirmada = typeof sesionesEscaneo.$inferInsert & { id: string; tipo: TipoConfirmadoEnElMovil }
+
 /**
- * Registers the delivery the crew confirmed and queues it: the worker is the only one that writes it to Odoo.
+ * Saves a sesión the phone confirmed (an entrega, a reasignación) and queues it: the worker is the only one that writes
+ * it to Odoo. It is saved straight as `confirmada_pendiente_sync`: what the phone sends is what was confirmed.
  *
  * Idempotent by `id`. The phone makes the id up before its first try, so a second try with it (the connection
- * dropped and the answer never came) finds the entrega already saved: it is not saved or audited a second time.
- * If that entrega is still waiting for its sync, the retry queues it again. The first try may have saved it and
+ * dropped and the answer never came) finds the sesión already saved: it is not saved or audited a second time.
+ * If that sesión is still waiting for its sync, the retry queues it again. The first try may have saved it and
  * failed to queue it (QStash down), and answering "registered" with nothing queued would hide that. A second
- * message does no harm: the queue runs one job at a time, and the worker does nothing for an entrega that is not
+ * message does no harm: the queue runs one job at a time, and the worker does nothing for a sesión that is not
  * waiting for its sync any more. One that is not (synced, or failed for good, which goes back through
- * Pendientes' "Reintentar") is left alone, and so is an id that belongs to something other than an entrega.
+ * Pendientes' "Reintentar") is left alone, and so is an id that belongs to another kind of sesión.
  *
- * The confirmation is audited right after the save, before queuing, so it is recorded exactly once: the crew
- * confirmed it whatever happens to the queue, and the retry that has to queue it audits nothing.
+ * The confirmation is audited right after the save, before queuing, so it is recorded exactly once: it was
+ * confirmed whatever happens to the queue, and the retry that has to queue it audits nothing.
  *
- * It is saved straight as `confirmada_pendiente_sync`: an entrega has no earlier stage, since what the phone
- * sends is what the crew confirmed. The name is trimmed, and the signature is stored as bare base64, which is
- * what Odoo takes. `paquetes` is what those lines are (package, courier, delivery), kept with them so that Pendientes
- * and the search of a package can tell which packages the entrega handed over.
- *
- * If queuing fails, in either try, the error goes through and the entrega stays as it is. It is not deleted: a
+ * If queuing fails, in either try, the error goes through and the sesión stays as it is. It is not deleted: a
  * repeated try may have found it meanwhile. A retry with the same id queues it; if nobody retries, Pendientes
  * lists it as stuck after a while.
  */
-export async function registrarEntrega(entrada: {
-  id: string
-  operarioId: string
-  almacenId: number
-  barcoOdooId: number
-  pickingIds: number[]
-  moveLineIds: number[]
-  paquetes: PaqueteEntregado[]
-  receptorNombre: string
-  firmaBase64: string
+export async function guardarYEncolar(entrada: {
+  sesion: SesionConfirmada
+  auditoria: { accion: AccionAuditoria; detalle: Record<string, unknown> }
 }): Promise<void> {
-  const { id, operarioId, almacenId, barcoOdooId, moveLineIds } = entrada
+  const { sesion, auditoria } = entrada
 
   const [creada] = await db.insert(sesionesEscaneo)
-    .values({
-      id,
-      operarioId,
-      almacenId,
-      barcoOdooId,
-      tipo: 'entrega',
-      estado: 'confirmada_pendiente_sync',
-      odooPickingIds: entrada.pickingIds,
-      odooMoveLineIds: moveLineIds,
-      paquetesEntrega: entrada.paquetes,
-      receptorNombre: entrada.receptorNombre.trim(),
-      firmaData: entrada.firmaBase64.trim().replace(PREFIJO_DATA_URL, ''),
-      confirmedAt: new Date(),
-    })
+    .values({ ...sesion, estado: 'confirmada_pendiente_sync', confirmedAt: new Date() })
     .onConflictDoNothing()
     .returning({ id: sesionesEscaneo.id })
 
@@ -158,63 +141,115 @@ export async function registrarEntrega(entrada: {
     // sync, which is also true when the first try did queue it and the worker has not got to it.
     const existente = await db.query.sesionesEscaneo.findFirst({
       columns: { estado: true },
-      where: and(eq(sesionesEscaneo.id, id), eq(sesionesEscaneo.tipo, 'entrega')),
+      where: and(eq(sesionesEscaneo.id, sesion.id), eq(sesionesEscaneo.tipo, sesion.tipo)),
     })
-    if (existente?.estado === 'confirmada_pendiente_sync') await publishSync({ sesionId: id })
+    if (existente?.estado === 'confirmada_pendiente_sync') await publishSync({ sesionId: sesion.id })
     return
   }
 
-  // Audited before queuing: the crew's confirmation is a fact as soon as the entrega is saved, whatever then happens
-  // to the queue. That way it is recorded exactly once, also when publishing fails here and a retry has to queue it.
+  // Audited before queuing: the confirmation is a fact as soon as the sesión is saved, whatever then happens to the
+  // queue. That way it is recorded exactly once, also when publishing fails here and a retry has to queue it.
   // (It never throws, so it cannot get in the way of queuing.)
-  await registrarAuditoria({
-    operarioId,
-    accion: 'entrega_confirmada',
-    detalle: { sesionId: id, almacenId, barcoOdooId, paquetes: moveLineIds.length },
-  })
+  await registrarAuditoria({ operarioId: sesion.operarioId, accion: auditoria.accion, detalle: auditoria.detalle })
 
-  await publishSync({ sesionId: id })
+  await publishSync({ sesionId: sesion.id })
 }
 
 /**
- * Whether an entrega with this id was saved in this almacén, in whatever estado: the id of a retry of one that an
- * earlier try saved. Such a retry has nothing left to check against Odoo, since what the entrega holds may be
- * delivered by now, and `registrarEntrega` is the one that knows what to do with it.
+ * Registers the delivery the crew confirmed and queues it, once per `id` (see `guardarYEncolar`). The name is trimmed,
+ * and the signature is stored as bare base64, which is what Odoo takes. `paquetes` is what those lines are (package,
+ * courier, delivery), kept with them so that Pendientes and the search of a package can tell which packages the entrega
+ * handed over.
  */
-export async function entregaGuardada(id: string, almacenId: number): Promise<boolean> {
+export async function registrarEntrega(entrada: {
+  id: string
+  operarioId: string
+  almacenId: number
+  barcoOdooId: number
+  pickingIds: number[]
+  moveLineIds: number[]
+  paquetes: PaqueteDeOdoo[]
+  receptorNombre: string
+  firmaBase64: string
+}): Promise<void> {
+  const { id, operarioId, almacenId, barcoOdooId, moveLineIds } = entrada
+
+  await guardarYEncolar({
+    sesion: {
+      id,
+      operarioId,
+      almacenId,
+      barcoOdooId,
+      tipo: 'entrega',
+      odooPickingIds: entrada.pickingIds,
+      odooMoveLineIds: moveLineIds,
+      paquetesDeOdoo: entrada.paquetes,
+      receptorNombre: entrada.receptorNombre.trim(),
+      firmaData: entrada.firmaBase64.trim().replace(PREFIJO_DATA_URL, ''),
+    },
+    auditoria: { accion: 'entrega_confirmada', detalle: { sesionId: id, almacenId, barcoOdooId, paquetes: moveLineIds.length } },
+  })
+}
+
+/**
+ * Whether a sesión of this kind with this id was saved in this almacén, in whatever estado: the id of a retry of one that
+ * an earlier try saved. Such a retry has nothing left to check against Odoo, since what the sesión holds may be
+ * delivered or moved by now, and `guardarYEncolar` is the one that knows what to do with it.
+ */
+export async function sesionGuardada(entrada: { id: string; tipo: TipoConfirmadoEnElMovil; almacenId: number }): Promise<boolean> {
   const existente = await db.query.sesionesEscaneo.findFirst({
     columns: { id: true },
-    where: and(eq(sesionesEscaneo.id, id), eq(sesionesEscaneo.tipo, 'entrega'), eq(sesionesEscaneo.almacenId, almacenId)),
+    where: and(
+      eq(sesionesEscaneo.id, entrada.id),
+      eq(sesionesEscaneo.tipo, entrada.tipo),
+      eq(sesionesEscaneo.almacenId, entrada.almacenId),
+    ),
   })
   return existente !== undefined
 }
 
 /**
- * The move lines that an entrega of the almacén for the barco, still waiting for its sync (`confirmada_pendiente_sync`),
- * has taken. The worker has not got to it yet, so Odoo still lists those lines as pending: they must not be offered
- * again, nor accepted by a second entrega, or the same packages would be handed over twice.
+ * The move lines of the barco in the almacén that an entrega or a reasignación still waiting for its sync
+ * (`confirmada_pendiente_sync`) has taken, each with why: an entrega hands it over, a reasignación moves it to the barco
+ * its `Retencion` names. The worker has not got to them yet, so Odoo still lists those lines as waiting for the barco: they
+ * must not be offered again, nor accepted by a second entrega or reasignación, or the same packages would be handed over
+ * twice, or handed over while they are being moved.
  *
- * Only that estado holds. A synced entrega's lines are no longer pending in Odoo, and one that failed delivered
- * nothing: its packages go back through Pendientes, and meanwhile they are not stuck.
+ * Only that estado holds. A synced sesión's lines are no longer pending for the barco in Odoo, and one that failed did
+ * nothing with them: they go back through Pendientes, and meanwhile they are not stuck.
  *
- * `exceptoId` leaves out one entrega: the one being confirmed again. A retry with the same id finds its own lines held,
+ * `exceptoId` leaves out one sesión: the one being confirmed again. A retry with the same id finds its own lines held,
  * and they must not block it.
  */
-export async function moveLineIdsRetenidas(entrada: {
+export async function lineasRetenidas(entrada: {
   almacenId: number
   barcoOdooId: number
   exceptoId?: string
-}): Promise<Set<number>> {
-  const filas = await db.select({ lineas: sesionesEscaneo.odooMoveLineIds })
+}): Promise<Map<number, Retencion>> {
+  const filas = await db.select({
+    tipo: sesionesEscaneo.tipo,
+    lineas: sesionesEscaneo.odooMoveLineIds,
+    barcoDestinoOdooId: sesionesEscaneo.barcoDestinoOdooId,
+    barcoDestinoNombre: barcosCache.nombre,
+  })
     .from(sesionesEscaneo)
+    .leftJoin(barcosCache, eq(barcosCache.odooId, sesionesEscaneo.barcoDestinoOdooId))
     .where(and(
       eq(sesionesEscaneo.almacenId, entrada.almacenId),
       eq(sesionesEscaneo.barcoOdooId, entrada.barcoOdooId),
-      eq(sesionesEscaneo.tipo, 'entrega'),
+      inArray(sesionesEscaneo.tipo, ['entrega', 'reasignacion']),
       eq(sesionesEscaneo.estado, 'confirmada_pendiente_sync'),
       entrada.exceptoId === undefined ? undefined : ne(sesionesEscaneo.id, entrada.exceptoId),
     ))
-  return new Set(filas.flatMap((fila) => fila.lineas ?? []))
+
+  const retenidas = new Map<number, Retencion>()
+  for (const fila of filas) {
+    const retencion: Retencion = fila.tipo === 'reasignacion' && fila.barcoDestinoOdooId !== null
+      ? { tipo: 'reasignacion', barcoNombre: nombreDelBarco(fila.barcoDestinoNombre, fila.barcoDestinoOdooId) }
+      : { tipo: 'entrega' }
+    for (const linea of fila.lineas ?? []) retenidas.set(linea, retencion)
+  }
+  return retenidas
 }
 
 /** An entrega confirmed today. */

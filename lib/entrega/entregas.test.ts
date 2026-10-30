@@ -19,7 +19,7 @@ import { abrirRecepcion, escanearPaquete } from '@/lib/recepcion/recepciones'
 import { seedAlmacen, seedBarco, seedCourier, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import {
-  entregaGuardada, listarBarcosParaEntregar, listarEntregadasHoy, moveLineIdsRetenidas, nombreDelBarco, registrarEntrega,
+  lineasRetenidas, listarBarcosParaEntregar, listarEntregadasHoy, nombreDelBarco, registrarEntrega, sesionGuardada,
 } from './entregas'
 
 let veronika: Operario
@@ -386,7 +386,7 @@ describe('registrarEntrega', () => {
       barcoOdooId: 673,
       odooPickingIds: [700, 701],
       odooMoveLineIds: [1, 2, 5],
-      paquetesEntrega: PAQUETES,
+      paquetesDeOdoo: PAQUETES,
       intentos: 0,
       ultimoError: null,
       ultimoErrorTipo: null,
@@ -401,7 +401,7 @@ describe('registrarEntrega', () => {
     await registrarEntrega(entrada)
     await registrarEntrega({ ...entrada, pickingIds: [], moveLineIds: [], paquetes: [] })
 
-    expect((await filaSesion(entrada.id)).paquetesEntrega).toEqual(PAQUETES)
+    expect((await filaSesion(entrada.id)).paquetesDeOdoo).toEqual(PAQUETES)
   })
 
   it('queues the entrega once it is saved, and audits it', async () => {
@@ -526,19 +526,21 @@ describe('listarEntregadasHoy', () => {
   })
 })
 
-describe('entregaGuardada', () => {
+describe('sesionGuardada', () => {
+  const guardada = (id: string, almacenId = mb92.id) => sesionGuardada({ id, tipo: 'entrega', almacenId })
+
   it('knows an entrega that an earlier try saved, whatever became of its sync', async () => {
     for (const estado of ['confirmada_pendiente_sync', 'sincronizada', 'error'] as const) {
       const entrada = entradaDeEntrega()
       await registrarEntrega(entrada)
       await db.update(sesionesEscaneo).set({ estado }).where(eq(sesionesEscaneo.id, entrada.id))
 
-      expect(await entregaGuardada(entrada.id, mb92.id)).toBe(true)
+      expect(await guardada(entrada.id)).toBe(true)
     }
   })
 
   it('does not know an id nobody saved', async () => {
-    expect(await entregaGuardada(crypto.randomUUID(), mb92.id)).toBe(false)
+    expect(await guardada(crypto.randomUUID())).toBe(false)
   })
 
   it('does not know an entrega of another almacén: a retry is a retry in the same almacén', async () => {
@@ -546,8 +548,8 @@ describe('entregaGuardada', () => {
     const entrada = entradaDeEntrega({ almacenId: tgn.id })
     await registrarEntrega(entrada)
 
-    expect(await entregaGuardada(entrada.id, mb92.id)).toBe(false)
-    expect(await entregaGuardada(entrada.id, tgn.id)).toBe(true)
+    expect(await guardada(entrada.id)).toBe(false)
+    expect(await guardada(entrada.id, tgn.id)).toBe(true)
   })
 
   it('does not take a recepción for an entrega', async () => {
@@ -555,11 +557,21 @@ describe('entregaGuardada', () => {
       operarioId: veronika.id, almacenId: mb92.id, barcoOdooId: 673, tipo: 'recepcion', estado: 'confirmada_pendiente_sync', confirmedAt: new Date(),
     }).returning()
 
-    expect(await entregaGuardada(recepcion.id, mb92.id)).toBe(false)
+    expect(await guardada(recepcion.id)).toBe(false)
+  })
+
+  it('tells a reasignación from an entrega: each is a retry of its own kind', async () => {
+    const [reasignacion] = await db.insert(sesionesEscaneo).values({
+      operarioId: veronika.id, almacenId: mb92.id, barcoOdooId: 673, barcoDestinoOdooId: 674, tipo: 'reasignacion',
+      estado: 'confirmada_pendiente_sync', confirmedAt: new Date(),
+    }).returning()
+
+    expect(await guardada(reasignacion.id)).toBe(false)
+    expect(await sesionGuardada({ id: reasignacion.id, tipo: 'reasignacion', almacenId: mb92.id })).toBe(true)
   })
 })
 
-describe('moveLineIdsRetenidas', () => {
+describe('lineasRetenidas', () => {
   /** An entrega with these lines, written straight to the database so that it can be in any estado, almacén or barco. */
   async function entregaCon(
     lineas: number[] | null,
@@ -582,8 +594,9 @@ describe('moveLineIdsRetenidas', () => {
     return sesion
   }
 
-  const retenidas = (datos: Partial<Parameters<typeof moveLineIdsRetenidas>[0]> = {}) =>
-    moveLineIdsRetenidas({ almacenId: mb92.id, barcoOdooId: 673, ...datos })
+  /** The lines held, whatever holds them. */
+  const retenidas = async (datos: Partial<Parameters<typeof lineasRetenidas>[0]> = {}) =>
+    new Set((await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673, ...datos })).keys())
 
   it('holds the lines of an entrega that is still waiting for its sync: Odoo still lists them as pending', async () => {
     await entregaCon([11, 12], 'confirmada_pendiente_sync')
@@ -646,6 +659,40 @@ describe('moveLineIdsRetenidas', () => {
 
   it('holds nothing when there is no entrega', async () => {
     expect(await retenidas()).toEqual(new Set())
+  })
+
+  // The barco 674 is MAYANQUEENIV, which the packages go to.
+  describe('what a reasignación holds', () => {
+    it('holds the lines a reasignación of the barco is moving, saying where to; and those of an entrega, as an entrega', async () => {
+      await entregaCon([11], 'confirmada_pendiente_sync')
+      await entregaCon([12, 13], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
+      await entregaCon([14], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 999 })
+
+      expect(await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673 })).toEqual(new Map([
+        [11, { tipo: 'entrega' }],
+        [12, { tipo: 'reasignacion', barcoNombre: 'MAYANQUEENIV' }],
+        [13, { tipo: 'reasignacion', barcoNombre: 'MAYANQUEENIV' }],
+        [14, { tipo: 'reasignacion', barcoNombre: 'Barco #999' }],
+      ]))
+    })
+
+    it.each(['sincronizada', 'error'] as const)('does not hold the lines of a reasignación that is %s', async (estado) => {
+      await entregaCon([12], estado, { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
+
+      expect(await retenidas()).toEqual(new Set())
+    })
+
+    it('holds them for the barco they are taken from, not for the one they go to: Odoo lists them on the first until they move', async () => {
+      await entregaCon([12], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
+
+      expect(await retenidas({ barcoOdooId: 674 })).toEqual(new Set())
+    })
+
+    it('leaves out the reasignación being confirmed again', async () => {
+      const propia = await entregaCon([12], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
+
+      expect(await retenidas({ exceptoId: propia.id })).toEqual(new Set())
+    })
   })
 })
 

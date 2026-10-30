@@ -5,18 +5,22 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useState, useTransition } from 'react'
 import { FiltroTracking } from '@/components/filtro-tracking'
 import { SignaturePad } from '@/components/signature-pad'
-// Type only: lib/odoo/pickings.ts reaches Odoo, which must not get into the client.
+// Types only: these modules reach the database and Odoo, which must not get into the client.
+import type { Moviendose } from '@/lib/entrega/lineas'
 import type { LineaEntrega } from '@/lib/odoo/pickings'
 import { filtrarPorTracking, mostrarFiltro } from '@/lib/ui/busqueda-tracking'
 import { textoDePaquetes } from '@/lib/ui/cola-escaneo'
+import { textoDeMoviendose } from '@/lib/ui/mover-paquetes'
 import {
-  alternarLinea, MAX_NOMBRE_RECEPTOR, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEnviandose, textoDeLinea,
+  alternarLinea, MAX_NOMBRE_RECEPTOR, puedeConfirmar, resumenSeleccion, textoDeAvisoSinEnviar, textoDeEnviandose,
   textoDeSeleccion, textoDeSiguiente, textoSinPaquetes,
 } from '@/lib/ui/seleccion-entrega'
 import { llamarAccion, sinRespuesta } from '@/lib/ui/textoDeFallo'
 import { confirmarEntregaAction, enviarRecepcionesDelBarcoAction } from '../actions'
+import { FilaDeLinea } from './FilaDeLinea'
+import { MoverPaquetes } from './MoverPaquetes'
 
-type Paso = 'paquetes' | 'firma' | 'hecho'
+type Paso = 'paquetes' | 'firma' | 'hecho' | 'mover'
 
 /** What "Enviar ahora" answered, under the strip that offered it. */
 interface Aviso {
@@ -29,37 +33,14 @@ interface Aviso {
 /** How long "Entrega registrada" stays on the screen before the list of barcos comes back. */
 const ESPERA_ANTES_DE_VOLVER_MS = 2000
 
-/** A line of the list: its package and courier, and whether it is handed over or stays in depósito. It is touched to change that. */
-function FilaDeLinea({ linea, elegida, onAlternar }: {
-  linea: LineaEntrega
-  elegida: boolean
-  onAlternar: (moveLineId: number) => void
-}) {
-  const { codigo, courier } = textoDeLinea(linea)
-
-  return (
-    <li>
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={elegida}
-        className={`list-row linea${elegida ? '' : ' linea-fuera'}`}
-        onClick={() => onAlternar(linea.moveLineId)}
-      >
-        <span className="linea-caja" aria-hidden="true">✓</span>
-        <span className="mono linea-codigo">{codigo}</span>
-        {elegida ? (courier ? <span className="badge">{courier}</span> : null) : <span className="linea-deposito">en depósito</span>}
-      </button>
-    </li>
-  )
-}
-
 /**
  * Steps 2 and 3 of the delivery, on the phone, and what follows them:
  *
  * - `paquetes`: every line Odoo has waiting for the barco, all of them chosen; touching one leaves it in depósito.
  * - `firma`: the name of who receives and their signature, and the button that confirms.
  * - `hecho`: "Entrega registrada", and back to the list of barcos, where it shows under "Entregadas hoy".
+ * - `mover`: the packages that are not this barco's, moved to the one they are for (`MoverPaquetes`). Back from it, the
+ *   choice of what is handed over is as it was.
  *
  * Confirming must lose nothing and make nothing twice. The `id` is made up once, here, before the first try, and every try
  * (the first one and each "Reintentar") sends that same id: the domain saves one entrega per id. If the answer is a failure,
@@ -71,7 +52,7 @@ function FilaDeLinea({ linea, elegida, onAlternar }: {
  * The filter by tracking number only hides rows. What is chosen, what "Se entregan" counts and what is signed for are all
  * the lines, the hidden ones included: a package that is filtered out is still handed over if it is chosen.
  */
-export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, sinEnviar, enviandose, filtroInicial }: {
+export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, sinEnviar, enviandose, moviendose, filtroInicial }: {
   barcoOdooId: number
   barcoNombre: string
   almacenPrefijo: string
@@ -80,6 +61,8 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
   sinEnviar: number
   /** The packages Odoo still lists that an entrega already confirmed is taking to Odoo: they are not in `lineas`, so they cannot be handed over twice. */
   enviandose: number
+  /** The packages Odoo still lists that a reasignación already confirmed is taking to another barco, barco by barco: not in `lineas` either. */
+  moviendose: Moviendose[]
   /** What the list opens filtered by: the `q` of the address, which is how the search of a package leads here. */
   filtroInicial: string
 }) {
@@ -97,6 +80,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
 
   const resumen = resumenSeleccion(lineas, elegidas)
   const visibles = filtrarPorTracking(lineas, filtro)
+  const enCamino = enviandose + moviendose.reduce((total, destino) => total + destino.paquetes, 0)
   // Nothing of what is sent can change while it is sent, nor after it failed and has to be sent again as it was.
   const bloqueado = enviando || error !== null
 
@@ -168,6 +152,19 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
           <Link href="/entrega" replace className="btn btn-primary">Volver a Entrega</Link>
         </div>
       </>
+    )
+  }
+
+  if (paso === 'mover') {
+    return (
+      <MoverPaquetes
+        barcoOdooId={barcoOdooId}
+        barcoNombre={barcoNombre}
+        almacenPrefijo={almacenPrefijo}
+        lineas={lineas}
+        filtroInicial={filtro}
+        onVolver={() => setPaso('paquetes')}
+      />
     )
   }
 
@@ -244,6 +241,9 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       ) : null}
 
       {enviandose > 0 ? <p className="banner banner-ok" role="status">{textoDeEnviandose(enviandose)}</p> : null}
+      {moviendose.map((destino) => (
+        <p key={destino.barcoNombre} className="banner banner-ok" role="status">{textoDeMoviendose(destino)}</p>
+      ))}
 
       {aviso ? (
         <div className={`banner ${aviso.tono === 'ok' ? 'banner-ok' : 'banner-error'} entrega-franja`} role={aviso.tono === 'ok' ? 'status' : 'alert'}>
@@ -253,7 +253,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
       ) : null}
 
       {lineas.length === 0 ? (
-        <p className="lista-vacia">{textoSinPaquetes(enviandose)}</p>
+        <p className="lista-vacia">{textoSinPaquetes(enCamino)}</p>
       ) : (
         <section className="inicio-seccion" aria-labelledby="paquetes-rotulo">
           <h2 className="label" id="paquetes-rotulo">{textoDeSeleccion(resumen)}</h2>
@@ -268,10 +268,17 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
                   linea={linea}
                   elegida={elegidas.has(linea.moveLineId)}
                   onAlternar={(moveLineId) => setElegidas((actual) => alternarLinea(actual, moveLineId))}
+                  textoFuera="en depósito"
                 />
               ))}
             </ul>
           ) : null}
+          {/* Packages received for this barco by mistake are taken from here to the one they are for. */}
+          <div className="actions">
+            <button type="button" className="btn-link" disabled={enviando} onClick={() => setPaso('mover')}>
+              Mover paquetes a otro barco ›
+            </button>
+          </div>
         </section>
       )}
 

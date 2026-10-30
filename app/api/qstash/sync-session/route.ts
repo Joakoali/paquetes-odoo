@@ -3,9 +3,18 @@ import { eq } from 'drizzle-orm'
 import { verifyQstashSignature } from '@/lib/queue/verify'
 import { db } from '@/db/client'
 import { sesionesEscaneo } from '@/db/schema'
+import type { SesionEscaneo } from '@/db/schema'
 import { syncRecepcionSession } from '@/lib/sync/recepcion'
 import { syncEntregaSession } from '@/lib/sync/entrega'
+import { syncReasignacionSession } from '@/lib/sync/reasignacion'
 import { registrarFalloSync } from '@/lib/sync/estado'
+
+/** The worker of each kind of session: a new kind does not compile until it has one. */
+const WORKERS: Record<SesionEscaneo['tipo'], (sesionId: string) => Promise<void>> = {
+  recepcion: syncRecepcionSession,
+  entrega: syncEntregaSession,
+  reasignacion: syncReasignacionSession,
+}
 
 // A session can hold dozens of packages, each an Odoo round trip throttled to
 // ~1 req/s — well past Vercel's default function timeout.
@@ -29,11 +38,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!sesion) return NextResponse.json({ error: 'sesion not found' }, { status: 404 })
 
   try {
-    if (sesion.tipo === 'recepcion') {
-      await syncRecepcionSession(sesionId)
-    } else {
-      await syncEntregaSession(sesionId)
-    }
+    await WORKERS[sesion.tipo](sesionId)
     return NextResponse.json({ ok: true })
   } catch (err) {
     // How many times QStash has already redelivered this message: 0 on the first delivery.

@@ -8,7 +8,9 @@ vi.mock('@/db/client', () => ({
 vi.mock('next/cache', () => ({ refresh: vi.fn(), revalidatePath: vi.fn() }))
 vi.mock('@/lib/auth/current-operario', () => ({ requireOperarioFromCookies: vi.fn() }))
 vi.mock('@/lib/almacen-activo', () => ({ requireAlmacenActivo: vi.fn() }))
-vi.mock('@/lib/entrega/entregas', () => ({ registrarEntrega: vi.fn(), entregaGuardada: vi.fn(), moveLineIdsRetenidas: vi.fn() }))
+vi.mock('@/lib/entrega/entregas', () => ({ registrarEntrega: vi.fn(), sesionGuardada: vi.fn(), lineasRetenidas: vi.fn() }))
+vi.mock('@/lib/entrega/reasignaciones', () => ({ registrarReasignacion: vi.fn() }))
+vi.mock('@/lib/cache/barcos', () => ({ barcoActivo: vi.fn() }))
 // The action re-reads what Odoo has waiting for the barco: the one read it makes outside the queue.
 vi.mock('@/lib/odoo/pickings', () => ({ getLineasEntregaPendiente: vi.fn() }))
 vi.mock('@/lib/recepcion/recepciones', () => ({ enviarRecepcionesAbiertas: vi.fn() }))
@@ -18,12 +20,16 @@ import type { Almacen, Operario } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { UnauthorizedError } from '@/lib/auth/guards'
-import { entregaGuardada, moveLineIdsRetenidas, registrarEntrega } from '@/lib/entrega/entregas'
+import { barcoActivo } from '@/lib/cache/barcos'
+import { lineasRetenidas, registrarEntrega, sesionGuardada } from '@/lib/entrega/entregas'
+import type { Retencion } from '@/lib/entrega/lineas'
+import { registrarReasignacion } from '@/lib/entrega/reasignaciones'
 import { ErrorParaOperario, OdooError } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { enviarRecepcionesAbiertas } from '@/lib/recepcion/recepciones'
 import { LECTURA_DE_ODOO_FALLIDA } from '@/lib/ui/lectura-fallida'
-import { confirmarEntregaAction, enviarRecepcionesDelBarcoAction } from './actions'
+import { BARCO_DESTINO_DESCONOCIDO, MISMO_BARCO } from '@/lib/ui/mover-paquetes'
+import { confirmarEntregaAction, enviarRecepcionesDelBarcoAction, moverPaquetesAction } from './actions'
 
 const SESION_VENCIDA = 'Tu sesión venció. Volvé a entrar.'
 const SIN_ALMACENES = 'No tenés almacenes asignados. Avisá al admin.'
@@ -35,6 +41,8 @@ const SIN_FIRMA = 'Falta la firma.'
 const ENTREGA_INVALIDA = 'Esa entrega no es válida. Volvé a abrir el barco.'
 const YA_NO_PENDIENTES = 'Algunos paquetes ya no están pendientes de entrega. Volvé a abrir el barco.'
 const EN_ENVIO = 'Algunos paquetes ya están en una entrega que se está enviando a Odoo. Volvé a abrir el barco.'
+const MOVIENDOSE = 'Algunos paquetes ya se están pasando a otro barco. Volvé a abrir el barco.'
+const CAMBIO_INVALIDO = 'Ese cambio de barco no es válido. Volvé a abrir el barco.'
 
 const ID = '5f0c7a9e-3b1d-4c55-9a52-0d9a3c1e7b10'
 const FIRMA = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg=='
@@ -67,8 +75,13 @@ beforeEach(() => {
   vi.mocked(requireOperarioFromCookies).mockResolvedValue(operario)
   vi.mocked(requireAlmacenActivo).mockResolvedValue(mb92)
   vi.mocked(getLineasEntregaPendiente).mockResolvedValue(lineasEnOdoo)
-  vi.mocked(moveLineIdsRetenidas).mockResolvedValue(new Set())
+  vi.mocked(lineasRetenidas).mockResolvedValue(new Map())
+  vi.mocked(sesionGuardada).mockResolvedValue(false)
+  vi.mocked(barcoActivo).mockResolvedValue(true)
 })
+
+/** The lines an entrega on its way to Odoo holds. */
+const deEntregas = (...lineas: number[]) => new Map<number, Retencion>(lineas.map((id) => [id, { tipo: 'entrega' }]))
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -218,14 +231,14 @@ describe('confirmarEntregaAction', () => {
     })
 
     it('lets a retry of an entrega that was already saved through without asking Odoo: what it holds is no longer waiting once it synced', async () => {
-      vi.mocked(entregaGuardada).mockResolvedValue(true)
+      vi.mocked(sesionGuardada).mockResolvedValue(true)
       vi.mocked(getLineasEntregaPendiente).mockResolvedValue([]) // the worker already delivered them
 
       expect(await confirmarEntregaAction(entrada())).toEqual({ ok: true, valor: undefined })
 
-      expect(entregaGuardada).toHaveBeenCalledWith(ID, mb92.id)
+      expect(sesionGuardada).toHaveBeenCalledWith({ id: ID, tipo: 'entrega', almacenId: mb92.id })
       expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
-      expect(moveLineIdsRetenidas).not.toHaveBeenCalled()
+      expect(lineasRetenidas).not.toHaveBeenCalled()
       expect(registrarEntrega).toHaveBeenCalledTimes(1)
       expect(registrarEntrega).toHaveBeenCalledWith(expect.objectContaining({ id: ID, almacenId: mb92.id, operarioId: operario.id }))
       // Nothing of what the retry sends is used: the packages the first try saved stay as they are.
@@ -238,12 +251,12 @@ describe('confirmarEntregaAction', () => {
       await confirmarEntregaAction(entrada())
 
       // Leaving out its own id is what lets a retry of the same entrega through while its own lines are held.
-      expect(moveLineIdsRetenidas).toHaveBeenCalledTimes(1)
-      expect(moveLineIdsRetenidas).toHaveBeenCalledWith({ almacenId: mb92.id, barcoOdooId: 673, exceptoId: ID })
+      expect(lineasRetenidas).toHaveBeenCalledTimes(1)
+      expect(lineasRetenidas).toHaveBeenCalledWith({ almacenId: mb92.id, barcoOdooId: 673, exceptoId: ID })
     })
 
     it('rejects a held line with a plain message of its own, and registers nothing: it would be delivered twice', async () => {
-      vi.mocked(moveLineIdsRetenidas).mockResolvedValue(new Set([12]))
+      vi.mocked(lineasRetenidas).mockResolvedValue(deEntregas(12))
 
       expect(await confirmarEntregaAction(entrada({ moveLineIds: [11, 12] }))).toEqual({ ok: false, error: EN_ENVIO })
 
@@ -252,7 +265,7 @@ describe('confirmarEntregaAction', () => {
     })
 
     it('accepts the lines that are not held, whatever others are', async () => {
-      vi.mocked(moveLineIdsRetenidas).mockResolvedValue(new Set([12, 21]))
+      vi.mocked(lineasRetenidas).mockResolvedValue(deEntregas(12, 21))
 
       expect(await confirmarEntregaAction(entrada({ moveLineIds: [11] }))).toEqual({ ok: true, valor: undefined })
 
@@ -261,7 +274,7 @@ describe('confirmarEntregaAction', () => {
 
     it('does not hide a failure to read what is held: nothing is registered', async () => {
       const consola = silenciarConsoleError()
-      vi.mocked(moveLineIdsRetenidas).mockRejectedValue(new Error('connection refused'))
+      vi.mocked(lineasRetenidas).mockRejectedValue(new Error('connection refused'))
 
       expect(await confirmarEntregaAction(entrada())).toEqual({ ok: false, error: GENERICO })
 
@@ -453,5 +466,132 @@ describe('enviarRecepcionesDelBarcoAction', () => {
     expect(await enviarRecepcionesDelBarcoAction(673)).toEqual({ ok: false, error: SIN_ALMACENES })
 
     expect(enviarRecepcionesAbiertas).not.toHaveBeenCalled()
+  })
+})
+
+describe('moverPaquetesAction', () => {
+  /** What the phone sends when the operario confirms the move: two lines of MAYANQUEEN (673) that go to ARCTIC (674). */
+  const cambio = (datos: Partial<Parameters<typeof moverPaquetesAction>[0]> = {}) => ({
+    id: ID,
+    barcoOdooId: 673,
+    barcoDestinoOdooId: 674,
+    moveLineIds: [12, 21],
+    ...datos,
+  })
+
+  const noSeRegistro = () => {
+    expect(registrarReasignacion).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+  }
+
+  it('registers the move with the active almacén, the operario of the session and the lines Odoo has waiting, and redraws the barco', async () => {
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: true, valor: undefined })
+
+    expect(getLineasEntregaPendiente).toHaveBeenCalledWith({ outTypeId: mb92.odooOutTypeId, barcoOdooId: 673 })
+    expect(lineasRetenidas).toHaveBeenCalledWith({ almacenId: mb92.id, barcoOdooId: 673, exceptoId: ID })
+    expect(barcoActivo).toHaveBeenCalledWith(674)
+    expect(registrarReasignacion).toHaveBeenCalledWith({
+      id: ID,
+      operarioId: operario.id,
+      almacenId: mb92.id,
+      barcoOdooId: 673,
+      barcoDestinoOdooId: 674,
+      pickingIds: [700, 701],
+      moveLineIds: [12, 21],
+      paquetes: [
+        { trackingNumber: 'T12', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
+        { trackingNumber: 'T21', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00701' },
+      ],
+    })
+    // The answer brings the barco drawn again: without the packages that go, which are held now.
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes the operario and the almacén from the session, never from the input', async () => {
+    await moverPaquetesAction({ ...cambio(), operarioId: 'otro', almacenId: 99 } as Parameters<typeof moverPaquetesAction>[0])
+
+    expect(registrarReasignacion).toHaveBeenCalledWith(expect.objectContaining({ operarioId: operario.id, almacenId: mb92.id }))
+  })
+
+  it('refuses to move the packages to the barco they are on, before anything is looked at', async () => {
+    expect(await moverPaquetesAction(cambio({ barcoDestinoOdooId: 673 }))).toEqual({ ok: false, error: MISMO_BARCO })
+
+    expect(requireOperarioFromCookies).not.toHaveBeenCalled()
+    noSeRegistro()
+  })
+
+  it.each([
+    ['an id that is not one the phone makes', { id: 'abc' }],
+    ['a barco id that cannot exist', { barcoOdooId: 0 }],
+    ['a destino id that cannot exist', { barcoDestinoOdooId: 2_147_483_648 }],
+    ['a destino that is not a number', { barcoDestinoOdooId: '674' as unknown as number }],
+  ])('refuses %s before the session, the almacén or Odoo are touched', async (_caso, datos) => {
+    expect(await moverPaquetesAction(cambio(datos))).toEqual({ ok: false, error: CAMBIO_INVALIDO })
+
+    expect(requireOperarioFromCookies).not.toHaveBeenCalled()
+    expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
+    noSeRegistro()
+  })
+
+  it('asks for at least one package', async () => {
+    expect(await moverPaquetesAction(cambio({ moveLineIds: [] }))).toEqual({ ok: false, error: SIN_PAQUETES })
+    expect(await moverPaquetesAction(cambio({ moveLineIds: 'todos' as unknown as number[] }))).toEqual({ ok: false, error: SIN_PAQUETES })
+    noSeRegistro()
+  })
+
+  it('refuses a destino the search of barcos does not offer, without reading Odoo', async () => {
+    vi.mocked(barcoActivo).mockResolvedValue(false)
+
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: BARCO_DESTINO_DESCONOCIDO })
+
+    expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
+    noSeRegistro()
+  })
+
+  it('refuses a line Odoo does not list as waiting for the barco in this almacén', async () => {
+    expect(await moverPaquetesAction(cambio({ moveLineIds: [12, 555] }))).toEqual({ ok: false, error: YA_NO_PENDIENTES })
+    noSeRegistro()
+  })
+
+  it('refuses a line an entrega on its way to Odoo is handing over, and one another reasignación is moving', async () => {
+    vi.mocked(lineasRetenidas).mockResolvedValue(deEntregas(12))
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: EN_ENVIO })
+
+    vi.mocked(lineasRetenidas).mockResolvedValue(new Map([[21, { tipo: 'reasignacion', barcoNombre: 'H3' }]]))
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: MOVIENDOSE })
+    noSeRegistro()
+  })
+
+  it('says Odoo could not be read, and registers nothing, when the read fails', async () => {
+    vi.mocked(getLineasEntregaPendiente).mockRejectedValue(new OdooError({ status: 502, data: '<html>Bad gateway</html>' }))
+
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: LECTURA_DE_ODOO_FALLIDA })
+    noSeRegistro()
+  })
+
+  it('lets a retry of a move that was already saved through without asking Odoo or the cache again', async () => {
+    vi.mocked(sesionGuardada).mockResolvedValue(true)
+    vi.mocked(getLineasEntregaPendiente).mockResolvedValue([]) // the worker already moved them
+
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: true, valor: undefined })
+
+    expect(sesionGuardada).toHaveBeenCalledWith({ id: ID, tipo: 'reasignacion', almacenId: mb92.id })
+    expect(getLineasEntregaPendiente).not.toHaveBeenCalled()
+    expect(barcoActivo).not.toHaveBeenCalled()
+    expect(registrarReasignacion).toHaveBeenCalledWith(expect.objectContaining({ id: ID, moveLineIds: [], pickingIds: [], paquetes: [] }))
+  })
+
+  it('tells an operario whose session expired to log in again, and registers nothing', async () => {
+    vi.mocked(requireOperarioFromCookies).mockRejectedValue(new UnauthorizedError('expired'))
+
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: SESION_VENCIDA })
+    noSeRegistro()
+  })
+
+  it('tells an operario with no almacén so', async () => {
+    vi.mocked(requireAlmacenActivo).mockRejectedValue(new ErrorParaOperario(SIN_ALMACENES))
+
+    expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: SIN_ALMACENES })
+    noSeRegistro()
   })
 })

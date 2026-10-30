@@ -7,7 +7,7 @@ vi.mock('@/lib/odoo/busqueda', () => ({ buscarEnOdoo: vi.fn() }))
 import { db } from '@/db/client'
 import {
   sesionCourierBatches, sesionItems, sesionesEscaneo,
-  type Almacen, type Courier, type Operario, type PaqueteEntregado,
+  type Almacen, type Courier, type Operario, type PaqueteDeOdoo,
 } from '@/db/schema'
 import { ConfiguracionError, OdooError } from '@/lib/errores'
 import { buscarEnOdoo, type LineaEncontradaEnOdoo } from '@/lib/odoo/busqueda'
@@ -60,7 +60,7 @@ async function recepcion(
 }
 
 /** An entrega that handed these packages over, written straight to the database. */
-async function entrega(paquetes: PaqueteEntregado[], datos: Partial<typeof sesionesEscaneo.$inferInsert> = {}) {
+async function entrega(paquetes: PaqueteDeOdoo[], datos: Partial<typeof sesionesEscaneo.$inferInsert> = {}) {
   const [sesion] = await db.insert(sesionesEscaneo).values({
     operarioId: eduardo.id,
     almacenId: mb92.id,
@@ -69,9 +69,27 @@ async function entrega(paquetes: PaqueteEntregado[], datos: Partial<typeof sesio
     estado: 'confirmada_pendiente_sync',
     odooPickingIds: [700],
     odooMoveLineIds: paquetes.map((_, posicion) => posicion + 1),
-    paquetesEntrega: paquetes,
+    paquetesDeOdoo: paquetes,
     receptorNombre: 'Tom Baker',
     firmaData: 'AAA',
+    confirmedAt: new Date(),
+    ...datos,
+  }).returning()
+  return sesion
+}
+
+/** A reasignación of MAYANQUEEN (673) to H3 (935) that moved these packages, written straight to the database. */
+async function reasignacion(paquetes: PaqueteDeOdoo[], datos: Partial<typeof sesionesEscaneo.$inferInsert> = {}) {
+  const [sesion] = await db.insert(sesionesEscaneo).values({
+    operarioId: eduardo.id,
+    almacenId: mb92.id,
+    barcoOdooId: 673,
+    barcoDestinoOdooId: 935,
+    tipo: 'reasignacion',
+    estado: 'confirmada_pendiente_sync',
+    odooPickingIds: [700],
+    odooMoveLineIds: paquetes.map((_, posicion) => posicion + 1),
+    paquetesDeOdoo: paquetes,
     confirmedAt: new Date(),
     ...datos,
   }).returning()
@@ -96,6 +114,53 @@ const enOdoo = (datos: Partial<LineaEncontradaEnOdoo>): LineaEncontradaEnOdoo =>
 const paqueteDe = (tracking: string) => ({ trackingNumber: tracking, courierNombre: 'DHL', pickingRef: 'MB92/OUT/00487' })
 
 describe('buscarPaquetes', () => {
+  describe('in the reasignaciones of the webapp', () => {
+    it('says a package was moved, from which barco to which, by whom, and how its sending goes', async () => {
+      const movida = await reasignacion([paqueteDe('JJD000390007840588'), paqueteDe('XW297134737JF')], {
+        estado: 'sincronizada', odooPickingRef: 'MB92/OUT/00512',
+      })
+
+      const { paquetes } = await buscarPaquetes('0588')
+
+      expect(paquetes.map((paquete) => paquete.trackingNumber)).toEqual(['JJD000390007840588'])
+      expect(paquetes[0].lugares).toEqual([{
+        tipo: 'reasignacion',
+        trackingNumber: 'JJD000390007840588',
+        almacenId: mb92.id,
+        almacenPrefijo: 'MB92',
+        barcoOdooId: 673,
+        barcoNombre: 'MAYANQUEEN',
+        fecha: movida.confirmedAt,
+        sesionId: movida.id,
+        estado: 'ok',
+        barcoDestinoOdooId: 935,
+        barcoDestinoNombre: 'H3',
+        destinoRef: 'MB92/OUT/00512',
+        operarioNombre: 'Eduardo',
+      }])
+    })
+
+    it('tells the move between the recepción and the delivery of Odoo it went into, without hiding that delivery', async () => {
+      await recepcion([{ trackingNumber: 'JJD000390007840588', escaneadoAt: hace(30) }], {
+        estado: 'sincronizada', odooPickingRef: 'MB92/IN/00231', confirmedAt: hace(30),
+      })
+      await reasignacion([paqueteDe('JJD000390007840588')], { confirmedAt: hace(2) })
+      vi.mocked(buscarEnOdoo).mockResolvedValue([
+        enOdoo({ pickingId: 12, pickingRef: 'MB92/OUT/00512', pickingTypeId: 2, operacion: 'entrega', hecho: false, barco: { odooId: 935, nombre: 'H3' }, fecha: hace(1) }),
+      ])
+
+      const { paquetes: [paquete] } = await buscarPaquetes('0588')
+
+      expect(paquete.lugares.map((lugar) => lugar.tipo)).toEqual(['recepcion', 'reasignacion', 'odoo'])
+    })
+
+    it('does not find a package of a reasignación without number', async () => {
+      await reasignacion([{ trackingNumber: null, courierNombre: 'UPS', pickingRef: 'MB92/OUT/00487' }])
+
+      expect((await buscarPaquetes('0588')).paquetes).toEqual([])
+    })
+  })
+
   describe('in the recepciones of the webapp', () => {
     it('finds a package by a part of its number, whatever the case and the blanks', async () => {
       const abierta = await recepcion([{ trackingNumber: 'JJD000390007840588' }, { trackingNumber: 'XW297134737JF' }])
@@ -205,7 +270,7 @@ describe('buscarPaquetes', () => {
     })
 
     it('finds nothing in an entrega confirmed before the entregas kept their packages', async () => {
-      await entrega([], { paquetesEntrega: null })
+      await entrega([], { paquetesDeOdoo: null })
 
       expect((await buscarPaquetes('0588')).paquetes).toEqual([])
     })
@@ -311,7 +376,7 @@ describe('buscarPaquetes', () => {
 
       const { paquetes: [paquete] } = await buscarPaquetes('0588')
 
-      expect(paquete.lugares.map((lugar) => [lugar.tipo, 'pickingRef' in lugar ? lugar.pickingRef : lugar.odooPickingRef])).toEqual([
+      expect(paquete.lugares.map((lugar) => [lugar.tipo, 'pickingRef' in lugar ? lugar.pickingRef : 'odooPickingRef' in lugar ? lugar.odooPickingRef : null])).toEqual([
         ['odoo', 'MB92/IN/00198'],
         ['odoo', 'MB92/OUT/00487'],
         // A duplicado stands for no picking: what it was sent with does not have it.

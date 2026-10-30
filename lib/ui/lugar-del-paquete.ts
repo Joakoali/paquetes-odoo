@@ -64,6 +64,16 @@ export function describirLugar(lugar: LugarDelPaquete, ahora: Date): Descripcion
     return { titulo: 'Entregado', estado: estadoDeEnvio(lugar.estado, lugar.pickingRef), detalle: detalleDe(lugar, { ahora, quien }) }
   }
 
+  if (lugar.tipo === 'reasignacion') {
+    // From which barco to which: the detail names both where the others name one.
+    const conLosDosBarcos = { ...lugar, barcoNombre: `${lugar.barcoNombre} → ${lugar.barcoDestinoNombre}` }
+    return {
+      titulo: 'Cambiado de barco',
+      estado: estadoDeEnvio(lugar.estado, lugar.destinoRef),
+      detalle: detalleDe(conLosDosBarcos, { ahora, quien: lugar.operarioNombre }),
+    }
+  }
+
   const enCurso: EstadoDeLugar = { texto: lugar.pickingRef, tono: 'en_curso' }
   const hecho: EstadoDeLugar = { texto: `✓ ${lugar.pickingRef}`, tono: 'ok' }
   if (lugar.operacion === 'recepcion') {
@@ -86,7 +96,8 @@ export function describirLugar(lugar: LugarDelPaquete, ahora: Date): Descripcion
  * - a recepción opens (the screen to scan, or what it had once it was sent) when the operario has its almacén, which is
  *   what its page asks of everybody, the admin included. One that could not be sent goes to Pendientes instead, if
  *   Pendientes shows the operario that almacén: that is where it is retried;
- * - an entrega has no screen of its own: only one that could not be sent goes somewhere, to Pendientes;
+ * - an entrega has no screen of its own: only one that could not be sent goes somewhere, to Pendientes. So it is with a
+ *   reasignación: where its package waits now is the delivery of Odoo it went into, which is a place of its own;
  * - a delivery of Odoo still waiting opens its barco in Entrega, but only in the almacén Entrega works in: in any other
  *   the barco would open with what it has waiting in this one;
  * - anything else in Odoo is only told.
@@ -100,7 +111,7 @@ export function enlaceDeLugar(lugar: LugarDelPaquete, acceso: AccesoDelOperario)
     if (lugar.estado === 'problema' && !lugar.duplicado) return aPendientes
     return suyo ? { href: conFiltro(`/recepcion/${lugar.sesionId}`), texto: 'Abrir' } : null
   }
-  if (lugar.tipo === 'entrega') return lugar.estado === 'problema' ? aPendientes : null
+  if (lugar.tipo === 'entrega' || lugar.tipo === 'reasignacion') return lugar.estado === 'problema' ? aPendientes : null
 
   const esperaEnEsteAlmacen = lugar.operacion === 'entrega' && !lugar.hecho && lugar.almacenId !== null && lugar.almacenId === acceso.almacenActivoId
   return esperaEnEsteAlmacen && lugar.barcoOdooId !== null ? { href: conFiltro(`/entrega/${lugar.barcoOdooId}`), texto: 'Abrir' } : null

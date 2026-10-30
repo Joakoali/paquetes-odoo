@@ -1,0 +1,1066 @@
+{
+  "id": "45c8ea7c-d126-4f7b-b696-26f91c47a365",
+  "prevId": "1727bbda-870a-47ab-9209-53e704d32632",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.almacenes": {
+      "name": "almacenes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "prefijo": {
+          "name": "prefijo",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nombre": {
+          "name": "nombre",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "odoo_picking_type_id": {
+          "name": "odoo_picking_type_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odoo_out_type_id": {
+          "name": "odoo_out_type_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odoo_warehouse_id": {
+          "name": "odoo_warehouse_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "activo": {
+          "name": "activo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "almacenes_prefijo_unique": {
+          "name": "almacenes_prefijo_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "prefijo"
+          ]
+        },
+        "almacenes_odoo_warehouse_id_unique": {
+          "name": "almacenes_odoo_warehouse_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "odoo_warehouse_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.audit_log": {
+      "name": "audit_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "operario_id": {
+          "name": "operario_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accion": {
+          "name": "accion",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "detalle": {
+          "name": "detalle",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "audit_log_operario_id_operarios_id_fk": {
+          "name": "audit_log_operario_id_operarios_id_fk",
+          "tableFrom": "audit_log",
+          "tableTo": "operarios",
+          "columnsFrom": [
+            "operario_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.barcos_cache": {
+      "name": "barcos_cache",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "odoo_id": {
+          "name": "odoo_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nombre": {
+          "name": "nombre",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "activo": {
+          "name": "activo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "barcos_cache_odoo_id_unique": {
+          "name": "barcos_cache_odoo_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "odoo_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.courier_uso": {
+      "name": "courier_uso",
+      "schema": "",
+      "columns": {
+        "almacen_id": {
+          "name": "almacen_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "courier_id": {
+          "name": "courier_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "usos": {
+          "name": "usos",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "courier_uso_almacen_id_almacenes_id_fk": {
+          "name": "courier_uso_almacen_id_almacenes_id_fk",
+          "tableFrom": "courier_uso",
+          "tableTo": "almacenes",
+          "columnsFrom": [
+            "almacen_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "courier_uso_courier_id_couriers_id_fk": {
+          "name": "courier_uso_courier_id_couriers_id_fk",
+          "tableFrom": "courier_uso",
+          "tableTo": "couriers",
+          "columnsFrom": [
+            "courier_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "courier_uso_almacen_id_courier_id_pk": {
+          "name": "courier_uso_almacen_id_courier_id_pk",
+          "columns": [
+            "almacen_id",
+            "courier_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.couriers": {
+      "name": "couriers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "nombre": {
+          "name": "nombre",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "odoo_product_id": {
+          "name": "odoo_product_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "activo": {
+          "name": "activo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "couriers_odoo_product_id_unique": {
+          "name": "couriers_odoo_product_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "odoo_product_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.operario_almacenes": {
+      "name": "operario_almacenes",
+      "schema": "",
+      "columns": {
+        "operario_id": {
+          "name": "operario_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "almacen_id": {
+          "name": "almacen_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "operario_almacenes_operario_id_operarios_id_fk": {
+          "name": "operario_almacenes_operario_id_operarios_id_fk",
+          "tableFrom": "operario_almacenes",
+          "tableTo": "operarios",
+          "columnsFrom": [
+            "operario_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "operario_almacenes_almacen_id_almacenes_id_fk": {
+          "name": "operario_almacenes_almacen_id_almacenes_id_fk",
+          "tableFrom": "operario_almacenes",
+          "tableTo": "almacenes",
+          "columnsFrom": [
+            "almacen_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "operario_almacenes_operario_id_almacen_id_pk": {
+          "name": "operario_almacenes_operario_id_almacen_id_pk",
+          "columns": [
+            "operario_id",
+            "almacen_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.operarios": {
+      "name": "operarios",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "nombre": {
+          "name": "nombre",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "login": {
+          "name": "login",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rol": {
+          "name": "rol",
+          "type": "rol",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'operario'"
+        },
+        "activo": {
+          "name": "activo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "operarios_login_unique": {
+          "name": "operarios_login_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "login"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.sesion_courier_batches": {
+      "name": "sesion_courier_batches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "sesion_id": {
+          "name": "sesion_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "courier_id": {
+          "name": "courier_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "odoo_move_id": {
+          "name": "odoo_move_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "sesion_courier_batches_sesion_id_sesiones_escaneo_id_fk": {
+          "name": "sesion_courier_batches_sesion_id_sesiones_escaneo_id_fk",
+          "tableFrom": "sesion_courier_batches",
+          "tableTo": "sesiones_escaneo",
+          "columnsFrom": [
+            "sesion_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "sesion_courier_batches_courier_id_couriers_id_fk": {
+          "name": "sesion_courier_batches_courier_id_couriers_id_fk",
+          "tableFrom": "sesion_courier_batches",
+          "tableTo": "couriers",
+          "columnsFrom": [
+            "courier_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sesion_courier_batches_sesion_id_courier_id_unique": {
+          "name": "sesion_courier_batches_sesion_id_courier_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "sesion_id",
+            "courier_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.sesion_items": {
+      "name": "sesion_items",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "courier_batch_id": {
+          "name": "courier_batch_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tracking_number": {
+          "name": "tracking_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estado": {
+          "name": "estado",
+          "type": "estado_item",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ok'"
+        },
+        "odoo_lot_id": {
+          "name": "odoo_lot_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "operario_id": {
+          "name": "operario_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duplicado_ref": {
+          "name": "duplicado_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duplicado_al_enviar": {
+          "name": "duplicado_al_enviar",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "sesion_items_tracking_number_idx": {
+          "name": "sesion_items_tracking_number_idx",
+          "columns": [
+            {
+              "expression": "tracking_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sesion_items_duplicado_al_enviar_idx": {
+          "name": "sesion_items_duplicado_al_enviar_idx",
+          "columns": [
+            {
+              "expression": "courier_batch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "duplicado_al_enviar",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sesion_items_courier_batch_id_sesion_courier_batches_id_fk": {
+          "name": "sesion_items_courier_batch_id_sesion_courier_batches_id_fk",
+          "tableFrom": "sesion_items",
+          "tableTo": "sesion_courier_batches",
+          "columnsFrom": [
+            "courier_batch_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "sesion_items_operario_id_operarios_id_fk": {
+          "name": "sesion_items_operario_id_operarios_id_fk",
+          "tableFrom": "sesion_items",
+          "tableTo": "operarios",
+          "columnsFrom": [
+            "operario_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sesion_items_courier_batch_id_tracking_number_unique": {
+          "name": "sesion_items_courier_batch_id_tracking_number_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "courier_batch_id",
+            "tracking_number"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.sesiones_auth": {
+      "name": "sesiones_auth",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "operario_id": {
+          "name": "operario_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "sesiones_auth_operario_id_operarios_id_fk": {
+          "name": "sesiones_auth_operario_id_operarios_id_fk",
+          "tableFrom": "sesiones_auth",
+          "tableTo": "operarios",
+          "columnsFrom": [
+            "operario_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.sesiones_escaneo": {
+      "name": "sesiones_escaneo",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "operario_id": {
+          "name": "operario_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "almacen_id": {
+          "name": "almacen_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "barco_odoo_id": {
+          "name": "barco_odoo_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "barco_destino_odoo_id": {
+          "name": "barco_destino_odoo_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tipo": {
+          "name": "tipo",
+          "type": "tipo_sesion",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estado": {
+          "name": "estado",
+          "type": "estado_sesion",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'en_curso'"
+        },
+        "odoo_picking_id": {
+          "name": "odoo_picking_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odoo_picking_ids": {
+          "name": "odoo_picking_ids",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odoo_picking_ref": {
+          "name": "odoo_picking_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "receptor_nombre": {
+          "name": "receptor_nombre",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odoo_move_line_ids": {
+          "name": "odoo_move_line_ids",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "paquetes_entrega": {
+          "name": "paquetes_entrega",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "firma_data": {
+          "name": "firma_data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "intentos": {
+          "name": "intentos",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "ultimo_error": {
+          "name": "ultimo_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ultimo_error_tipo": {
+          "name": "ultimo_error_tipo",
+          "type": "error_tipo",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "synced_at": {
+          "name": "synced_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revisado_at": {
+          "name": "revisado_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revisado_por": {
+          "name": "revisado_por",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "sesiones_recepcion_abierta_unica": {
+          "name": "sesiones_recepcion_abierta_unica",
+          "columns": [
+            {
+              "expression": "almacen_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "barco_odoo_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "tipo = 'recepcion' and estado = 'en_curso'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sesiones_escaneo_almacen_tipo_confirmed_at_idx": {
+          "name": "sesiones_escaneo_almacen_tipo_confirmed_at_idx",
+          "columns": [
+            {
+              "expression": "almacen_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "tipo",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "confirmed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sesiones_escaneo_esperando_sync_idx": {
+          "name": "sesiones_escaneo_esperando_sync_idx",
+          "columns": [
+            {
+              "expression": "almacen_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "barco_odoo_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "estado = 'confirmada_pendiente_sync'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sesiones_escaneo_operario_id_operarios_id_fk": {
+          "name": "sesiones_escaneo_operario_id_operarios_id_fk",
+          "tableFrom": "sesiones_escaneo",
+          "tableTo": "operarios",
+          "columnsFrom": [
+            "operario_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "sesiones_escaneo_almacen_id_almacenes_id_fk": {
+          "name": "sesiones_escaneo_almacen_id_almacenes_id_fk",
+          "tableFrom": "sesiones_escaneo",
+          "tableTo": "almacenes",
+          "columnsFrom": [
+            "almacen_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "sesiones_escaneo_revisado_por_operarios_id_fk": {
+          "name": "sesiones_escaneo_revisado_por_operarios_id_fk",
+          "tableFrom": "sesiones_escaneo",
+          "tableTo": "operarios",
+          "columnsFrom": [
+            "revisado_por"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.tracking_activos_cache": {
+      "name": "tracking_activos_cache",
+      "schema": "",
+      "columns": {
+        "tracking_number": {
+          "name": "tracking_number",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "odoo_picking_id": {
+          "name": "odoo_picking_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "odoo_picking_ref": {
+          "name": "odoo_picking_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.error_tipo": {
+      "name": "error_tipo",
+      "schema": "public",
+      "values": [
+        "configuracion",
+        "odoo",
+        "conexion"
+      ]
+    },
+    "public.estado_item": {
+      "name": "estado_item",
+      "schema": "public",
+      "values": [
+        "ok",
+        "duplicado",
+        "sincronizado",
+        "error"
+      ]
+    },
+    "public.estado_sesion": {
+      "name": "estado_sesion",
+      "schema": "public",
+      "values": [
+        "en_curso",
+        "confirmada_pendiente_sync",
+        "sincronizada",
+        "error"
+      ]
+    },
+    "public.rol": {
+      "name": "rol",
+      "schema": "public",
+      "values": [
+        "operario",
+        "admin"
+      ]
+    },
+    "public.tipo_sesion": {
+      "name": "tipo_sesion",
+      "schema": "public",
+      "values": [
+        "recepcion",
+        "entrega",
+        "reasignacion"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
