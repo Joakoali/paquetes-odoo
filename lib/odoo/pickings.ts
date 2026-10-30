@@ -3,7 +3,7 @@ import { ConfiguracionError, RespuestaOdooInesperadaError } from '../errores'
 import { parseFechaOdoo } from '../fechas'
 
 /** A Many2one as `search_read` returns it: `[id, displayName]`, or `false` when it is empty. */
-type Many2one = [number, string] | false
+export type Many2one = [number, string] | false
 
 interface MoveLineLotRead {
   lot_id: [number, string] | false
@@ -11,7 +11,7 @@ interface MoveLineLotRead {
 }
 
 /** Odoo `create` returns the new id(s); JSON-2 may hand back a scalar or a list. */
-function firstId(res: number | number[]): number {
+export function firstId(res: number | number[]): number {
   return Array.isArray(res) ? res[0] : res
 }
 
@@ -229,17 +229,17 @@ export async function validatePicking(pickingId: number): Promise<void> {
 }
 
 /** A condition of an Odoo domain: the field, the operator and the value. */
-type Condicion = [campo: string, operador: string, valor: unknown]
+export type Condicion = [campo: string, operador: string, valor: unknown]
 
 /**
  * What a delivery waiting to be handed over is: of the delivery type, with a barco, and neither draft,
- * done nor cancelled. The list of barcos and the list of packages both read with it, so "pending"
- * cannot mean one thing on one screen and another on the next.
+ * done nor cancelled. The list of barcos, the list of packages and the reasignación all read with it, so
+ * "pending" cannot mean one thing on one screen and another on the next.
  *
  * `picking_type_code` is left out on purpose: the operation type already says it is a delivery.
  * Asking for the reception type of the almacén together with `outgoing` can never match.
  */
-function dominioEntregasPendientes(outTypeId: number, barcoField: string): Condicion[] {
+export function dominioEntregasPendientes(outTypeId: number, barcoField: string): Condicion[] {
   return [
     ['picking_type_id', '=', outTypeId],
     ['state', 'not in', ['draft', 'done', 'cancel']],
@@ -248,7 +248,7 @@ function dominioEntregasPendientes(outTypeId: number, barcoField: string): Condi
 }
 
 /** The same conditions about a picking, asked of the move lines: each one about the picking the line is on. */
-function enSuPicking(dominio: Condicion[]): Condicion[] {
+export function enSuPicking(dominio: Condicion[]): Condicion[] {
   return dominio.map(([campo, operador, valor]) => [`picking_id.${campo}`, operador, valor])
 }
 

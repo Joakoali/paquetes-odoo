@@ -202,7 +202,7 @@ describe('EntregaBarcoPage', () => {
     const flujo = buscar(await pagina(), EntregaFlow)
 
     expect(flujo?.props).toEqual({
-      barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', almacenPrefijo: 'MB92', lineas, sinEnviar: 3, enviandose: 0, filtroInicial: '',
+      barcoOdooId: 673, barcoNombre: 'MAYANQUEEN', almacenPrefijo: 'MB92', lineas, sinEnviar: 3, enviandose: 0, moviendose: [], filtroInicial: '',
     })
   })
 
@@ -270,6 +270,28 @@ describe('EntregaBarcoPage', () => {
 
       expect(flujo?.props.lineas).toEqual(lineas)
       expect(flujo?.props.enviandose).toBe(0)
+    })
+  })
+
+  describe('packages that a reasignación on its way to Odoo is moving to another barco', () => {
+    it('leaves them out of what is offered, and says how many go to which barco, apart from those being delivered', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      await seedBarco(db, { odooId: 674, nombre: 'ARCTIC' })
+      await entregaCon(veronikaId, [11], 'confirmada_pendiente_sync')
+      await entregaCon(veronikaId, [12, 13], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
+
+      const flujo = buscar(await pagina(), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ lineas: [], enviandose: 1, moviendose: [{ barcoNombre: 'ARCTIC', paquetes: 2 }] })
+    })
+
+    it('offers them again if the reasignación failed: nothing was moved', async () => {
+      const { id: veronikaId } = await seedOperario(db, { nombre: 'Veronika' })
+      await entregaCon(veronikaId, [12], 'error', { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
+
+      const flujo = buscar(await pagina(), EntregaFlow)
+
+      expect(flujo?.props).toMatchObject({ lineas, moviendose: [] })
     })
   })
 

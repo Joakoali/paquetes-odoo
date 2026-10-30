@@ -5,6 +5,7 @@ vi.mock('@/db/client', async () => ({ db: await (await import('@/lib/testing/tes
 vi.mock('@/lib/queue/verify', () => ({ verifyQstashSignature: vi.fn() }))
 vi.mock('@/lib/sync/recepcion', () => ({ syncRecepcionSession: vi.fn() }))
 vi.mock('@/lib/sync/entrega', () => ({ syncEntregaSession: vi.fn() }))
+vi.mock('@/lib/sync/reasignacion', () => ({ syncReasignacionSession: vi.fn() }))
 vi.mock('@/lib/sync/estado', () => ({ registrarFalloSync: vi.fn() }))
 
 import { db } from '@/db/client'
@@ -12,6 +13,7 @@ import { sesionesEscaneo } from '@/db/schema'
 import { verifyQstashSignature } from '@/lib/queue/verify'
 import { syncEntregaSession } from '@/lib/sync/entrega'
 import { registrarFalloSync } from '@/lib/sync/estado'
+import { syncReasignacionSession } from '@/lib/sync/reasignacion'
 import { syncRecepcionSession } from '@/lib/sync/recepcion'
 import { seedAlmacen, seedOperario } from '@/lib/testing/seed'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
@@ -19,6 +21,7 @@ import { POST } from './route'
 
 let recepcionId: string
 let entregaId: string
+let reasignacionId: string
 
 beforeEach(async () => {
   vi.resetAllMocks()
@@ -33,12 +36,14 @@ beforeEach(async () => {
     barcoOdooId: 673,
     estado: 'confirmada_pendiente_sync' as const,
   }
-  const [recepcion, entrega] = await db.insert(sesionesEscaneo).values([
+  const [recepcion, entrega, reasignacion] = await db.insert(sesionesEscaneo).values([
     { ...base, tipo: 'recepcion' },
     { ...base, tipo: 'entrega' },
+    { ...base, tipo: 'reasignacion', barcoDestinoOdooId: 674 },
   ]).returning()
   recepcionId = recepcion.id
   entregaId = entrega.id
+  reasignacionId = reasignacion.id
 })
 
 /** What QStash sends: the signed body and, from the first retry on, how many retries it has made. */
@@ -96,6 +101,27 @@ describe('POST /api/qstash/sync-session', () => {
     expect(syncEntregaSession).toHaveBeenCalledWith(entregaId)
     expect(syncRecepcionSession).not.toHaveBeenCalled()
     expect(registrarFalloSync).not.toHaveBeenCalled()
+  })
+
+  it('syncs a reasignación with the reasignación worker and answers 200', async () => {
+    const res = await POST(mensajeDe(reasignacionId))
+
+    expect(res.status).toBe(200)
+    expect(syncReasignacionSession).toHaveBeenCalledWith(reasignacionId)
+    expect(syncEntregaSession).not.toHaveBeenCalled()
+    expect(syncRecepcionSession).not.toHaveBeenCalled()
+    expect(registrarFalloSync).not.toHaveBeenCalled()
+  })
+
+  it('notes the failure of a reasignación like any other', async () => {
+    const error = new Error('Odoo no separó los paquetes de su movimiento.')
+    vi.mocked(syncReasignacionSession).mockRejectedValue(error)
+    vi.mocked(registrarFalloSync).mockResolvedValue({ final: true, tipo: 'odoo' })
+
+    const res = await POST(mensajeDe(reasignacionId))
+
+    expect(res.status).toBe(200)
+    expect(registrarFalloSync).toHaveBeenCalledWith({ sesionId: reasignacionId, error, reintentosHechos: 0 })
   })
 
   it('returns 500 so QStash retries when the failure is not final', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { LugarEntrega, LugarOdoo, LugarRecepcion } from '@/lib/busqueda/paquetes'
+import type { LugarEntrega, LugarOdoo, LugarReasignacion, LugarRecepcion } from '@/lib/busqueda/paquetes'
 import { describirLugar, enlaceDeLugar, type AccesoDelOperario } from './lugar-del-paquete'
 
 const AHORA = new Date('2026-10-29T12:00:00Z')
@@ -17,6 +17,11 @@ const recepcion = (datos: Partial<LugarRecepcion> = {}): LugarRecepcion => ({
 
 const entrega = (datos: Partial<LugarEntrega> = {}): LugarEntrega => ({
   ...base, tipo: 'entrega', sesionId: 'e1', estado: 'enviando', pickingRef: 'MB92/OUT/00487', receptorNombre: 'Tom Baker', ...datos,
+})
+
+const reasignacion = (datos: Partial<LugarReasignacion> = {}): LugarReasignacion => ({
+  ...base, tipo: 'reasignacion', sesionId: 'r1', estado: 'enviando', barcoDestinoOdooId: 674, barcoDestinoNombre: 'ARCTIC',
+  destinoRef: null, operarioNombre: 'Eduardo', ...datos,
 })
 
 const odoo = (datos: Partial<LugarOdoo> = {}): LugarOdoo => ({
@@ -96,7 +101,29 @@ describe('describirLugar', () => {
   })
 })
 
+describe('describirLugar of a reasignación of the webapp', () => {
+  it('says the package was moved, from which barco to which, when and by whom, and how its sending goes', () => {
+    expect(describirLugar(reasignacion(), AHORA)).toEqual({
+      titulo: 'Cambiado de barco',
+      estado: { texto: 'enviándose a Odoo…', tono: 'en_curso' },
+      detalle: 'MB92 · MAYANQUEEN → ARCTIC · 28/10 10:32 · Eduardo',
+    })
+  })
+
+  it('says the delivery it went into once it is in Odoo, and that it failed when it did', () => {
+    expect(describirLugar(reasignacion({ estado: 'ok', destinoRef: 'MB92/OUT/00512' }), AHORA).estado).toEqual({ texto: '✓ MB92/OUT/00512', tono: 'ok' })
+    expect(describirLugar(reasignacion({ estado: 'problema' }), AHORA).estado).toEqual({ texto: '⚠ no se pudo enviar a Odoo', tono: 'problema' })
+  })
+})
+
 describe('enlaceDeLugar', () => {
+  it('takes a reasignación only to Pendientes, and only when it could not be sent: where the package waits is a place of its own', () => {
+    expect(enlaceDeLugar(reasignacion(), operario)).toBeNull()
+    expect(enlaceDeLugar(reasignacion({ estado: 'ok' }), operario)).toBeNull()
+    expect(enlaceDeLugar(reasignacion({ estado: 'problema' }), operario)).toEqual({ href: '/pendientes?q=JJD%200588', texto: 'Ver en Pendientes' })
+    expect(enlaceDeLugar(reasignacion({ estado: 'problema', almacenId: 7 }), operario)).toBeNull()
+  })
+
   it('opens a recepción of an almacén of the operario, filtered by the package', () => {
     expect(enlaceDeLugar(recepcion(), operario)).toEqual({ href: '/recepcion/s1?q=JJD%200588', texto: 'Abrir' })
     expect(enlaceDeLugar(recepcion({ estado: 'abierta' }), operario)?.href).toBe('/recepcion/s1?q=JJD%200588')

@@ -6,7 +6,7 @@ import { db } from '@/db/client'
 import { barcosCache } from '@/db/schema'
 import { resetTestDb, type TestDb } from '@/lib/testing/test-db'
 import { seedBarco } from '@/lib/testing/seed'
-import { BUSQUEDA_BARCOS_LIMITE, searchBarcos } from './barcos'
+import { barcoActivo, BUSQUEDA_BARCOS_LIMITE, searchBarcos } from './barcos'
 
 beforeEach(() => resetTestDb(db as unknown as TestDb))
 
@@ -93,5 +93,16 @@ describe('searchBarcos', () => {
     await seedBarco(db, { odooId: 943, nombre: 'H3', activo: false })
 
     expect(await searchBarcos('h3')).toEqual([{ odooId: 942, nombre: 'H3', etiqueta: 'H3' }])
+  })
+})
+
+describe('barcoActivo', () => {
+  it('is true for a barco the search offers, and false for one that is archived or that the cache does not know', async () => {
+    await seedBarco(db, { odooId: 1, nombre: 'MOONSHADOW' })
+    await seedBarco(db, { odooId: 2, nombre: 'MOONLIGHT', activo: false })
+
+    expect(await barcoActivo(1)).toBe(true)
+    expect(await barcoActivo(2)).toBe(false)
+    expect(await barcoActivo(3)).toBe(false)
   })
 })

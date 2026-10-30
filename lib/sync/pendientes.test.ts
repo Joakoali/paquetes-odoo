@@ -340,6 +340,7 @@ describe('listarProblemas', () => {
           { trackingNumber: 'JJD-2', ref: 'MB92/IN/00198' },
         ],
         entrega: null,
+        reasignacion: null,
         mensaje: mensajeProblema('odoo'),
         detalle: 'Odoo HTTP 422: El lote ya existe',
         loArreglaElAdmin: false,
@@ -392,7 +393,7 @@ describe('listarProblemas', () => {
         tipo: 'entrega',
         odooMoveLineIds: [11, 12, 13],
         receptorNombre: 'Capitán Pérez',
-        paquetesEntrega: [
+        paquetesDeOdoo: [
           { trackingNumber: 'JJD000390007840588', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
           { trackingNumber: null, courierNombre: 'UPS (incorrecto)', pickingRef: 'MB92/OUT/00700' },
           { trackingNumber: '1Z999AA10123456784', courierNombre: 'UPS', pickingRef: 'MB92/OUT/00701' },
@@ -423,6 +424,45 @@ describe('listarProblemas', () => {
       const [problema] = await listarProblemas('todos', AHORA)
 
       expect(problema.entrega).toEqual({ paquetes: 0, receptorNombre: null })
+    })
+
+    it('describes a reasignación that failed by the barco its packages go to, how many and which', async () => {
+      const reasignacion = await enError({
+        tipo: 'reasignacion',
+        barcoDestinoOdooId: 674,
+        odooMoveLineIds: [11, 12],
+        paquetesDeOdoo: [
+          { trackingNumber: 'QA-DHL-001', courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' },
+          { trackingNumber: null, courierNombre: 'UPS (incorrecto)', pickingRef: 'MB92/OUT/00700' },
+        ],
+      })
+
+      const [problema] = await listarProblemas('todos', AHORA)
+
+      expect(problema).toMatchObject({
+        sesionId: reasignacion.id,
+        tipo: 'error',
+        sesionTipo: 'reasignacion',
+        barcoNombre: 'MAYANQUEEN',
+        paquetes: [{ trackingNumber: 'QA-DHL-001', ref: null }],
+        entrega: null,
+        reasignacion: { paquetes: 2, barcoDestinoNombre: 'MAYANQUEENIV' },
+      })
+    })
+
+    it('lists a stuck reasignación, and calls a barco destino the cache does not know by its Odoo id', async () => {
+      await trabada({ tipo: 'reasignacion', barcoDestinoOdooId: 999, odooMoveLineIds: [5] })
+
+      const [problema] = await listarProblemas('todos', AHORA)
+
+      expect(problema).toMatchObject({ tipo: 'trabado', sesionTipo: 'reasignacion', reasignacion: { paquetes: 1, barcoDestinoNombre: 'Barco #999' } })
+    })
+
+    it('has no reasignación part on anything else', async () => {
+      await enError()
+      await enError({ tipo: 'entrega' })
+
+      expect((await listarProblemas('todos', AHORA)).map((problema) => problema.reasignacion)).toEqual([null, null])
     })
 
     it('has no entrega part on a recepción, which lists its own packages', async () => {

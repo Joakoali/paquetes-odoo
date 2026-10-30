@@ -5,8 +5,8 @@ import { db } from '@/db/client'
 import { barcosCache, type Almacen } from '@/db/schema'
 import { requireAlmacenActivo } from '@/lib/almacen-activo'
 import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
-import { moveLineIdsRetenidas, nombreDelBarco } from '@/lib/entrega/entregas'
-import { separarRetenidas } from '@/lib/entrega/lineas'
+import { lineasRetenidas, nombreDelBarco } from '@/lib/entrega/entregas'
+import { separarRetenidas, type Moviendose } from '@/lib/entrega/lineas'
 import { ConfiguracionError, ErrorParaOperario } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
 import { contarSinEnviarPorBarco } from '@/lib/recepcion/recepciones'
@@ -24,16 +24,25 @@ function idDeLaDireccion(texto: string): number | null {
   return id <= ID_MAXIMO ? id : null
 }
 
+/** What the screen of a barco shows, as `leerEntrega` reads it. */
+interface LecturaDeEntrega {
+  /** What Odoo has waiting for the barco in the almacén that no entrega or reasignación on its way to Odoo has taken. */
+  lineas: LineaEntrega[]
+  /** Its packages that an entrega on its way to Odoo is handing over. */
+  enviandose: number
+  /** Its packages that a reasignación on its way to Odoo is taking to another barco, barco by barco. */
+  moviendose: Moviendose[]
+  /** Whether Odoo has any package waiting for it at all. */
+  hayEnOdoo: boolean
+  /** Its packages received and not sent to Odoo yet. */
+  sinEnviar: number
+}
+
 /**
- * What Odoo has waiting for the barco in the almacén and no entrega on its way to Odoo has taken, how many of its packages
- * are taken like that, whether Odoo has any package waiting at all, and how many are received and not sent, or what to tell
- * the operario when they could not be read. Only a reading that failed is told: a bug goes on to the error screen
- * of the app.
+ * What the screen of the barco shows (see `LecturaDeEntrega`), or what to tell the operario when it could not be read.
+ * Only a reading that failed is told: a bug goes on to the error screen of the app.
  */
-async function leerEntrega(
-  almacen: Almacen,
-  barcoOdooId: number,
-): Promise<{ lineas: LineaEntrega[]; enviandose: number; hayEnOdoo: boolean; sinEnviar: number } | { mensaje: string }> {
+async function leerEntrega(almacen: Almacen, barcoOdooId: number): Promise<LecturaDeEntrega | { mensaje: string }> {
   try {
     if (!almacen.odooOutTypeId) {
       throw new ConfiguracionError('El almacén no tiene tipo de entrega. Refrescá los datos de Odoo.')
@@ -41,12 +50,13 @@ async function leerEntrega(
     const [pendientes, sinEnviar, retenidas] = await Promise.all([
       getLineasEntregaPendiente({ outTypeId: almacen.odooOutTypeId, barcoOdooId }),
       contarSinEnviarPorBarco(almacen.id),
-      moveLineIdsRetenidas({ almacenId: almacen.id, barcoOdooId }),
+      lineasRetenidas({ almacenId: almacen.id, barcoOdooId }),
     ])
-    // Odoo goes on listing the packages of an entrega until the worker validates it, about a minute after it was confirmed:
-    // they are not offered again meanwhile, or a second entrega of them would be one tap away.
-    const { disponibles, enviandose } = separarRetenidas(pendientes, retenidas)
-    return { lineas: disponibles, enviandose, hayEnOdoo: pendientes.length > 0, sinEnviar: sinEnviar.get(barcoOdooId) ?? 0 }
+    // Odoo goes on listing the packages of an entrega until the worker validates it, about a minute after it was confirmed,
+    // and those of a reasignación on this barco until the worker moves them: they are not offered again meanwhile, or a
+    // second entrega of them would be one tap away.
+    const { disponibles, enviandose, moviendose } = separarRetenidas(pendientes, retenidas)
+    return { lineas: disponibles, enviandose, moviendose, hayEnOdoo: pendientes.length > 0, sinEnviar: sinEnviar.get(barcoOdooId) ?? 0 }
   } catch (error) {
     const mensaje = mensajeDeLecturaFallida(error)
     if (mensaje === null) throw error
@@ -128,6 +138,7 @@ export default async function EntregaBarcoPage({ params, searchParams }: {
         lineas={lectura.lineas}
         sinEnviar={lectura.sinEnviar}
         enviandose={lectura.enviandose}
+        moviendose={lectura.moviendose}
         filtroInicial={filtro}
       />
     </main>

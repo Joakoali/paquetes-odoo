@@ -1,8 +1,9 @@
 import { and, asc, count, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { db } from '../../db/client'
 import {
   almacenes, barcosCache, operarios, sesionCourierBatches, sesionItems, sesionesEscaneo,
-  type ErrorTipo, type Operario, type PaqueteEntregado, type SesionEscaneo,
+  type ErrorTipo, type Operario, type PaqueteDeOdoo, type SesionEscaneo,
 } from '../../db/schema'
 import { getAlmacenesForOperario } from '../admin/operarioAlmacenes'
 import { registrarAuditoria } from '../audit'
@@ -31,10 +32,10 @@ export type Alcance = { almacenIds: number[] } | 'todos'
 export interface Problema {
   sesionId: string
   tipo: TipoProblema
-  sesionTipo: 'recepcion' | 'entrega'
+  sesionTipo: SesionEscaneo['tipo']
   almacenPrefijo: string
   barcoNombre: string
-  /** Who opened the recepción, or confirmed the entrega. */
+  /** Who opened the recepción, or confirmed the entrega or the reasignación. */
   operarioNombre: string
   /** When it was sent: what "hace 3 h" counts from. */
   fecha: Date
@@ -43,7 +44,7 @@ export interface Problema {
    * recepción, in the order they were scanned: for an `error` or a `trabado` they are all of them, since the whole
    * recepción is what failed; for a `duplicado`, only those left out. For an entrega, the packages it handed over
    * that have a number, in the order Odoo listed them, with no `ref`; none for one confirmed before the entregas kept
-   * them (`entrega` still says how many it covers).
+   * them (`entrega` still says how many it covers). For a reasignación, likewise, the packages it moves.
    */
   paquetes: Array<{ trackingNumber: string; ref: string | null }>
   /**
@@ -51,6 +52,11 @@ export interface Problema {
    * name of who received them. Null for a recepción.
    */
   entrega: { paquetes: number; receptorNombre: string | null } | null
+  /**
+   * What a reasignación says of the packages it moves: how many (those without number too) and the barco they go to.
+   * Null for anything else.
+   */
+  reasignacion: { paquetes: number; barcoDestinoNombre: string } | null
   /** What happened and what to do, in words for the operator. */
   mensaje: string
   /** The technical error, for "Ver detalle". */
@@ -160,8 +166,8 @@ async function paquetesDeLasSesiones(sesionIds: string[]): Promise<Map<string, P
   return porSesion
 }
 
-/** The packages an entrega handed over that have a number to list; none for one confirmed before they were kept. */
-function paquetesConNumero(paquetes: PaqueteEntregado[] | null): Problema['paquetes'] {
+/** The packages an entrega handed over or a reasignación moves that have a number to list; none for an entrega confirmed before they were kept. */
+function paquetesConNumero(paquetes: PaqueteDeOdoo[] | null): Problema['paquetes'] {
   return (paquetes ?? []).flatMap(({ trackingNumber }) => (trackingNumber === null ? [] : [{ trackingNumber, ref: null }]))
 }
 
@@ -179,6 +185,7 @@ function porUrgencia(a: Problema, b: Problema): number {
  * oldest first in each group. Those that were already reviewed are not in it. `ahora` decides what is stuck.
  */
 export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()): Promise<Problema[]> {
+  const barcoDestino = alias(barcosCache, 'barco_destino')
   const sesiones = await db.select({
     id: sesionesEscaneo.id,
     tipo: sesionesEscaneo.tipo,
@@ -188,10 +195,12 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
     confirmedAt: sesionesEscaneo.confirmedAt,
     createdAt: sesionesEscaneo.createdAt,
     odooMoveLineIds: sesionesEscaneo.odooMoveLineIds,
-    paquetesEntrega: sesionesEscaneo.paquetesEntrega,
+    paquetesDeOdoo: sesionesEscaneo.paquetesDeOdoo,
     receptorNombre: sesionesEscaneo.receptorNombre,
     barcoOdooId: sesionesEscaneo.barcoOdooId,
     barcoNombre: barcosCache.nombre,
+    barcoDestinoOdooId: sesionesEscaneo.barcoDestinoOdooId,
+    barcoDestinoNombre: barcoDestino.nombre,
     almacenPrefijo: almacenes.prefijo,
     operarioNombre: operarios.nombre,
   })
@@ -199,6 +208,7 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
     .innerJoin(almacenes, eq(almacenes.id, sesionesEscaneo.almacenId))
     .innerJoin(operarios, eq(operarios.id, sesionesEscaneo.operarioId))
     .leftJoin(barcosCache, eq(barcosCache.odooId, sesionesEscaneo.barcoOdooId))
+    .leftJoin(barcoDestino, eq(barcoDestino.odooId, sesionesEscaneo.barcoDestinoOdooId))
     .where(esProblema(alcance, ahora))
   if (sesiones.length === 0) return []
 
@@ -216,12 +226,18 @@ export async function listarProblemas(alcance: Alcance, ahora: Date = new Date()
       operarioNombre: sesion.operarioNombre,
       // Every sesión that gets here was confirmed; `createdAt` only keeps the type honest.
       fecha: sesion.confirmedAt ?? sesion.createdAt,
-      paquetes: sesion.tipo === 'entrega'
-        ? paquetesConNumero(sesion.paquetesEntrega)
-        : (tipo === 'duplicado' ? suyos.filter((paquete) => paquete.dejadoAfueraAlEnviar) : suyos)
-            .map(({ trackingNumber, ref }) => ({ trackingNumber, ref })),
+      paquetes: sesion.tipo === 'recepcion'
+        ? (tipo === 'duplicado' ? suyos.filter((paquete) => paquete.dejadoAfueraAlEnviar) : suyos)
+            .map(({ trackingNumber, ref }) => ({ trackingNumber, ref }))
+        : paquetesConNumero(sesion.paquetesDeOdoo),
       entrega: sesion.tipo === 'entrega'
         ? { paquetes: sesion.odooMoveLineIds?.length ?? 0, receptorNombre: sesion.receptorNombre }
+        : null,
+      reasignacion: sesion.tipo === 'reasignacion' && sesion.barcoDestinoOdooId !== null
+        ? {
+            paquetes: sesion.odooMoveLineIds?.length ?? 0,
+            barcoDestinoNombre: sesion.barcoDestinoNombre ?? `Barco #${sesion.barcoDestinoOdooId}`,
+          }
         : null,
       mensaje: mensajeDe(tipo, sesion.ultimoErrorTipo),
       detalle: sesion.ultimoError,

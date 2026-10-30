@@ -1,5 +1,5 @@
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
-import type { AnyPgColumn } from 'drizzle-orm/pg-core'
+import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core'
 import { db } from '../../db/client'
 import { almacenes, barcosCache, couriers, operarios, sesionCourierBatches, sesionItems, sesionesEscaneo } from '../../db/schema'
 import { escaparLike } from '../cache/barcos'
@@ -59,6 +59,20 @@ export interface LugarEntrega extends LugarBase {
   receptorNombre: string | null
 }
 
+/** A reasignación of the webapp that moved the package to another barco. Its barco is the one it was taken from. */
+export interface LugarReasignacion extends LugarBase {
+  tipo: 'reasignacion'
+  sesionId: string
+  estado: EntregaDeHoy['estado']
+  /** The barco the package went to. */
+  barcoDestinoOdooId: number
+  barcoDestinoNombre: string
+  /** The delivery of Odoo it went into, once the worker took one. */
+  destinoRef: string | null
+  /** Who moved it. */
+  operarioNombre: string
+}
+
 /** A picking of Odoo the package is on. */
 export interface LugarOdoo extends LugarBase {
   tipo: 'odoo'
@@ -68,7 +82,7 @@ export interface LugarOdoo extends LugarBase {
   recibidoPor: string | null
 }
 
-export type LugarDelPaquete = LugarRecepcion | LugarEntrega | LugarOdoo
+export type LugarDelPaquete = LugarRecepcion | LugarEntrega | LugarReasignacion | LugarOdoo
 
 export interface PaqueteEncontrado {
   trackingNumber: string
@@ -101,6 +115,11 @@ interface DeUnaFuente {
  */
 function contiene(columna: AnyPgColumn | SQL, buscado: string): SQL {
   return sql`regexp_replace(lower(${columna}), '[[:space:]]', '', 'g') like ${`%${escaparLike(buscado)}%`}`
+}
+
+/** Whether one of the packages an entrega or a reasignación kept (`paquetes_entrega`) has what is searched, as SQL. */
+function algunPaqueteContiene(buscado: string): SQL {
+  return sql`exists (select 1 from jsonb_array_elements(${sesionesEscaneo.paquetesDeOdoo}) as paquete where ${contiene(sql`paquete ->> 'trackingNumber'`, buscado)})`
 }
 
 /** Every package of a recepción of the webapp that has it, the last scanned first. */
@@ -172,15 +191,12 @@ async function enEntregas(buscado: string): Promise<DeUnaFuente> {
     receptorNombre: sesionesEscaneo.receptorNombre,
     confirmedAt: sesionesEscaneo.confirmedAt,
     createdAt: sesionesEscaneo.createdAt,
-    paquetes: sesionesEscaneo.paquetesEntrega,
+    paquetes: sesionesEscaneo.paquetesDeOdoo,
   })
     .from(sesionesEscaneo)
     .innerJoin(almacenes, eq(almacenes.id, sesionesEscaneo.almacenId))
     .leftJoin(barcosCache, eq(barcosCache.odooId, sesionesEscaneo.barcoOdooId))
-    .where(and(
-      eq(sesionesEscaneo.tipo, 'entrega'),
-      sql`exists (select 1 from jsonb_array_elements(${sesionesEscaneo.paquetesEntrega}) as paquete where ${contiene(sql`paquete ->> 'trackingNumber'`, buscado)})`,
-    ))
+    .where(and(eq(sesionesEscaneo.tipo, 'entrega'), algunPaqueteContiene(buscado)))
     .orderBy(desc(sesionesEscaneo.confirmedAt), desc(sesionesEscaneo.id))
     .limit(LIMITE_POR_FUENTE + 1)
 
@@ -203,6 +219,65 @@ async function enEntregas(buscado: string): Promise<DeUnaFuente> {
               estado: estadoDeEntrega(fila.estado, fila.ultimoError),
               pickingRef: paquete.pickingRef,
               receptorNombre: fila.receptorNombre,
+            },
+          }]
+        : []
+    ))),
+  }
+}
+
+/**
+ * Every package that a reasignación of the webapp moved to another barco and has it, the last one first: found as the
+ * entregas are, by the packages it kept.
+ */
+async function enReasignaciones(buscado: string): Promise<DeUnaFuente> {
+  const barcoDestino = alias(barcosCache, 'barco_destino')
+  const filas = await db.select({
+    sesionId: sesionesEscaneo.id,
+    estado: sesionesEscaneo.estado,
+    ultimoError: sesionesEscaneo.ultimoError,
+    almacenId: sesionesEscaneo.almacenId,
+    almacenPrefijo: almacenes.prefijo,
+    barcoOdooId: sesionesEscaneo.barcoOdooId,
+    barcoNombre: barcosCache.nombre,
+    barcoDestinoOdooId: sesionesEscaneo.barcoDestinoOdooId,
+    barcoDestinoNombre: barcoDestino.nombre,
+    destinoRef: sesionesEscaneo.odooPickingRef,
+    operarioNombre: operarios.nombre,
+    confirmedAt: sesionesEscaneo.confirmedAt,
+    createdAt: sesionesEscaneo.createdAt,
+    paquetes: sesionesEscaneo.paquetesDeOdoo,
+  })
+    .from(sesionesEscaneo)
+    .innerJoin(almacenes, eq(almacenes.id, sesionesEscaneo.almacenId))
+    .innerJoin(operarios, eq(operarios.id, sesionesEscaneo.operarioId))
+    .leftJoin(barcosCache, eq(barcosCache.odooId, sesionesEscaneo.barcoOdooId))
+    .leftJoin(barcoDestino, eq(barcoDestino.odooId, sesionesEscaneo.barcoDestinoOdooId))
+    .where(and(eq(sesionesEscaneo.tipo, 'reasignacion'), algunPaqueteContiene(buscado)))
+    .orderBy(desc(sesionesEscaneo.confirmedAt), desc(sesionesEscaneo.id))
+    .limit(LIMITE_POR_FUENTE + 1)
+
+  return {
+    hayMas: filas.length > LIMITE_POR_FUENTE,
+    hallazgos: filas.slice(0, LIMITE_POR_FUENTE).flatMap((fila) => (fila.paquetes ?? []).flatMap((paquete): Hallazgo[] => (
+      // Every reasignación has a barco destino; the check is for the types.
+      paquete.trackingNumber !== null && fila.barcoDestinoOdooId !== null && coincideTracking(paquete.trackingNumber, buscado)
+        ? [{
+            courierNombre: paquete.courierNombre,
+            lugar: {
+              tipo: 'reasignacion',
+              trackingNumber: paquete.trackingNumber,
+              almacenId: fila.almacenId,
+              almacenPrefijo: fila.almacenPrefijo,
+              barcoOdooId: fila.barcoOdooId,
+              barcoNombre: nombreDelBarco(fila.barcoNombre, fila.barcoOdooId),
+              fecha: fila.confirmedAt ?? fila.createdAt,
+              sesionId: fila.sesionId,
+              estado: estadoDeEntrega(fila.estado, fila.ultimoError),
+              barcoDestinoOdooId: fila.barcoDestinoOdooId,
+              barcoDestinoNombre: nombreDelBarco(fila.barcoDestinoNombre, fila.barcoDestinoOdooId),
+              destinoRef: fila.destinoRef,
+              operarioNombre: fila.operarioNombre,
             },
           }]
         : []
@@ -274,7 +349,8 @@ async function enOdoo(buscado: string): Promise<DeUnaFuente & { fallo: string | 
 /**
  * The picking a place of the webapp already stands for, if any: the one a recepción made, for a package it did send, and
  * the delivery an entrega took the package from. The same picking read from Odoo says less (not who scanned, not that the
- * entrega is still on its way, while Odoo goes on listing it as waiting), so it is not shown twice.
+ * entrega is still on its way, while Odoo goes on listing it as waiting), so it is not shown twice. A reasignación stands
+ * for none: the deliveries it took the package from and to are where Odoo says the package waits, and are told as such.
  */
 function pickingQueRepresenta(lugar: LugarDelPaquete): string | null {
   if (lugar.tipo === 'recepcion') return lugar.duplicado ? null : lugar.odooPickingRef
@@ -286,8 +362,8 @@ function pickingQueRepresenta(lugar: LugarDelPaquete): string | null {
 const ultimaFecha = (paquete: PaqueteEncontrado) => Math.max(...paquete.lugares.map((lugar) => lugar.fecha.getTime()))
 
 /**
- * Where the packages whose tracking number contains `buscado` are, in the webapp (its recepciones and entregas) and in
- * Odoo, which are read at once. `buscado` is what `textoDeBusqueda` gave: shorter than MIN_CARACTERES_BUSQUEDA, nothing is
+ * Where the packages whose tracking number contains `buscado` are, in the webapp (its recepciones, entregas and
+ * reasignaciones) and in Odoo, which are read at once. `buscado` is what `textoDeBusqueda` gave: shorter than MIN_CARACTERES_BUSQUEDA, nothing is
  * read. Each package is told once, whatever the case and the blanks each place writes it with, with its places in the
  * order they happened; the one whose number is exactly what was searched goes first, then the newest news.
  *
@@ -297,10 +373,13 @@ export async function buscarPaquetes(buscado: string): Promise<BusquedaDePaquete
   const texto = normalizarTracking(buscado)
   if (texto.length < MIN_CARACTERES_BUSQUEDA) return { paquetes: [], hayMas: false, odooFallo: null }
 
-  const [recepciones, entregas, odoo] = await Promise.all([enRecepciones(texto), enEntregas(texto), enOdoo(texto)])
+  const [recepciones, entregas, reasignaciones, odoo] = await Promise.all([
+    enRecepciones(texto), enEntregas(texto), enReasignaciones(texto), enOdoo(texto),
+  ])
 
   const porTracking = new Map<string, PaqueteEncontrado>()
-  for (const { lugar, courierNombre } of [...recepciones.hallazgos, ...entregas.hallazgos, ...odoo.hallazgos]) {
+  const hallazgos = [...recepciones.hallazgos, ...entregas.hallazgos, ...reasignaciones.hallazgos, ...odoo.hallazgos]
+  for (const { lugar, courierNombre } of hallazgos) {
     const clave = normalizarTracking(lugar.trackingNumber)
     const paquete = porTracking.get(clave) ?? { trackingNumber: lugar.trackingNumber, courierNombre: null, lugares: [] }
     // The courier as the first place that names one says it.
@@ -321,7 +400,7 @@ export async function buscarPaquetes(buscado: string): Promise<BusquedaDePaquete
 
   return {
     paquetes: paquetes.slice(0, LIMITE_PAQUETES).map(({ paquete }) => paquete),
-    hayMas: recepciones.hayMas || entregas.hayMas || odoo.hayMas || paquetes.length > LIMITE_PAQUETES,
+    hayMas: recepciones.hayMas || entregas.hayMas || reasignaciones.hayMas || odoo.hayMas || paquetes.length > LIMITE_PAQUETES,
     odooFallo: odoo.fallo,
   }
 }

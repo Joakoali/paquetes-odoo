@@ -17,6 +17,7 @@ const TITULOS: Record<TipoProblema, string> = {
 const SESIONES: Record<Problema['sesionTipo'], string> = {
   recepcion: 'Recepción',
   entrega: 'Entrega',
+  reasignacion: 'Cambio de barco',
 }
 
 function Tarjeta({ problema, ahora, esAdmin }: { problema: Problema; ahora: Date; esAdmin: boolean }) {
@@ -31,7 +32,8 @@ function Tarjeta({ problema, ahora, esAdmin }: { problema: Problema; ahora: Date
         <span className="badge">{TITULOS[tipo]}</span>
         {problema.loArreglaElAdmin ? <span className="badge">Lo tiene que arreglar el admin</span> : null}
       </p>
-      <h2>{problema.barcoNombre}</h2>
+      {/* A reasignación is about two barcos: the one the packages are on, and the one they go to. */}
+      <h2>{problema.reasignacion ? `${problema.barcoNombre} → ${problema.reasignacion.barcoDestinoNombre}` : problema.barcoNombre}</h2>
       <p>{quienYCuando}</p>
       {problema.entrega ? (
         // How many packages an entrega covers (those without number too) and who received them. The ones with a number
@@ -41,6 +43,10 @@ function Tarjeta({ problema, ahora, esAdmin }: { problema: Problema; ahora: Date
             .filter(Boolean)
             .join(' · ')}
         </p>
+      ) : null}
+      {problema.reasignacion ? (
+        // How many packages it moves (those without number too). The ones with a number are listed below.
+        <p>Se pasan {textoDePaquetes(problema.reasignacion.paquetes)} a {problema.reasignacion.barcoDestinoNombre}</p>
       ) : null}
 
       <p>{problema.mensaje}</p>

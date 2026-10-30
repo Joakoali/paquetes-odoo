@@ -50,6 +50,7 @@ function problema(datos: Partial<Problema> = {}): Problema {
     fecha: new Date('2026-10-23T09:00:00.000Z'),
     paquetes: [],
     entrega: null,
+    reasignacion: null,
     mensaje: 'Odoo rechazó el envío. Mirá el detalle o avisá al admin.',
     detalle: null,
     loArreglaElAdmin: false,
@@ -256,6 +257,21 @@ describe('PendientesPage', () => {
       expect(pagina).toContain('JJD000390007840588')
       expect(pagina).toContain('1Z999AA10123456784')
       expect(pagina).not.toContain('ya estaba en')
+    })
+
+    it('says a reasignación is a cambio de barco, from which barco to which, how many packages it moves and which', async () => {
+      const pagina = await html(problema({
+        sesionTipo: 'reasignacion',
+        reasignacion: { paquetes: 3, barcoDestinoNombre: 'ARCTIC' },
+        paquetes: [{ trackingNumber: 'QA-DHL-001', ref: null }, { trackingNumber: 'QA-DHL-002', ref: null }],
+      }))
+
+      expect(pagina).toContain('Cambio de barco · MB92 · Veronika')
+      expect(pagina).toContain('MAYANQUEEN → ARCTIC')
+      expect(pagina).toContain('Se pasan 3 paquetes a ARCTIC')
+      expect(pagina).toContain('QA-DHL-001')
+      expect(pagina).toContain('QA-DHL-002')
+      expect(pagina).not.toContain('recibió')
     })
 
     it('lists the packages in the order it is given them', async () => {

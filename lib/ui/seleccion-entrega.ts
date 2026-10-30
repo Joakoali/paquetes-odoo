@@ -70,9 +70,12 @@ export function textoDeEnviandose(cantidad: number): string {
   return `${textoDePaquetes(cantidad)} ${cantidad === 1 ? 'ya entregado' : 'ya entregados'}, enviándose a Odoo`
 }
 
-/** What the list of packages says when there is nothing to choose: either Odoo has nothing, or what it has is on its way. */
-export function textoSinPaquetes(enviandose: number): string {
-  return enviandose > 0 ? 'No quedan más paquetes para entregar.' : 'Odoo no tiene paquetes esperando entrega para este barco.'
+/**
+ * What the list of packages says when there is nothing to choose: either Odoo has nothing, or what it has is on its way
+ * (`enCamino`: the packages an entrega is handing over or a reasignación is moving to another barco).
+ */
+export function textoSinPaquetes(enCamino: number): string {
+  return enCamino > 0 ? 'No quedan más paquetes para entregar.' : 'Odoo no tiene paquetes esperando entrega para este barco.'
 }
 
 /**
