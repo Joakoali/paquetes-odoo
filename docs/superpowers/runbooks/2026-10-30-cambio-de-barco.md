@@ -23,7 +23,10 @@
 ## 2. Orden
 
 1. Aplicar la migración `0005` (§5) **antes de mergear el PR**.
-   - **Por qué antes:** mergear en `mejora-ui-revision` despliega producción. Sin el valor `reasignacion` del enum y sin la columna nueva fallarían el botón de mover, Pendientes, Buscar y las pantallas de un barco: todas leen esas sesiones.
+   - **Por qué antes:** mergear en `mejora-ui-revision` despliega producción.
+     - El worker de la cola lee la sesión entera (`app/api/qstash/sync-session/route.ts` y `lib/sync/*`), y eso incluye la columna nueva.
+     - Sin `0005`, **no se sincroniza ninguna recepción ni entrega**. La ruta falla antes de llegar a Odoo y QStash la reintenta. Como la cola es `parallelism: 1`, todo lo demás espera detrás, y al final el envío queda trabado.
+     - También fallarían el botón de mover, Pendientes, Buscar y las pantallas de un barco.
    - **Por qué es seguro hacerlo primero:** el código anterior no conoce ni el valor ni la columna, y los ignora.
 2. Mergear el PR y comprobar en Vercel que el deploy de producción sea el del merge commit y que haya terminado. Si la rama de producción de Vercel no es `mejora-ui-revision`, desplegar a mano como en `2026-10-29-busqueda-tracking.md` §2.
 3. Hacer los chequeos de §3 y el QA de §4.
@@ -141,18 +144,60 @@
 
 ## 5. Migración `0005`
 
-Producción no tiene tabla de migraciones: se aplica a mano, primero en una rama de Neon.
+Producción no tiene tabla de migraciones: se aplica a mano, en el SQL Editor de la consola de Neon. Primero en una rama de ensayo y después en producción.
+
+1. **Rama de ensayo:** en Branches, crear `ensayo-0005` desde la rama de producción, con los datos de ahora.
+2. En el SQL Editor, con `ensayo-0005` elegida, correr:
+   1. las **consultas de control**;
+   2. la **migración**;
+   3. las consultas de control otra vez.
+3. Si todo da lo esperado, repetir el paso 2 en la rama de producción.
+4. Borrar `ensayo-0005`.
+
+**Consultas de control** (solo leen):
 
 ```sql
-ALTER TYPE "public"."tipo_sesion" ADD VALUE 'reasignacion';
-ALTER TABLE "sesiones_escaneo" ADD COLUMN "barco_destino_odoo_id" integer;
+-- 1. Los valores del enum de tipos de sesión
+SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+WHERE t.typname = 'tipo_sesion' ORDER BY e.enumsortorder;
+
+-- 2. Las columnas de 0004 y 0005
+SELECT column_name, data_type, is_nullable FROM information_schema.columns
+WHERE table_name = 'sesiones_escaneo' AND column_name IN ('paquetes_entrega', 'barco_destino_odoo_id');
+
+-- 3. Cuántas sesiones hay, para comparar
+SELECT tipo, estado, count(*) FROM sesiones_escaneo GROUP BY tipo, estado ORDER BY tipo, estado;
 ```
 
+| Consulta | Antes de la migración | Después |
+| --- | --- | --- |
+| 1 | `recepcion`, `entrega` | `recepcion`, `entrega`, `reasignacion` |
+| 2 | solo `paquetes_entrega · jsonb · YES` | además, `barco_destino_odoo_id · integer · YES` |
+| 3 | — | los mismos números, salvo lo que se haya escaneado en el medio |
+
+Si antes de la migración la consulta 2 no muestra `paquetes_entrega`, falta `0004`. Hay que aplicarla primero:
+
+```sql
+ALTER TABLE "sesiones_escaneo" ADD COLUMN "paquetes_entrega" jsonb;
+```
+
+**Migración** (se puede correr dos veces sin romper nada):
+
+```sql
+BEGIN;
+ALTER TYPE "public"."tipo_sesion" ADD VALUE IF NOT EXISTS 'reasignacion';
+ALTER TABLE "sesiones_escaneo" ADD COLUMN IF NOT EXISTS "barco_destino_odoo_id" integer;
+COMMIT;
+```
+
+- Es lo mismo que `db/migrations/0005_reasignaciones.sql`, con `IF NOT EXISTS` para poder repetirlo.
 - Las dos sentencias son instantáneas: ninguna reescribe la tabla.
 - `ADD VALUE` puede ir dentro de una transacción (Postgres 12 o más; Neon usa 16 o 17) mientras el valor nuevo no se use en esa misma transacción.
+- Si el editor no acepta `BEGIN` y `COMMIT`, se pueden correr los dos `ALTER` solos: cada uno es seguro por separado.
 
-- [ ] Rama de Neon (copia de prod): aplicado sin errores. Resultado: ______
-- [ ] Prod: mismo SQL, sin errores. Resultado: ______
+- [ ] Rama de ensayo: aplicado, y las consultas de control dan lo esperado. Resultado: ______
+- [ ] Producción: lo mismo. Resultado: ______
+- [ ] Rama de ensayo borrada. Resultado: ______
 
 ---
 
