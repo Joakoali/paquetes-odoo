@@ -34,20 +34,21 @@ const ID_MAXIMO = 2_147_483_647
 /** What a canvas gives for a signature: `data:image/png;base64,` and then the image. Odoo is given what comes after it. */
 const FIRMA_PNG = /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/
 
+/** The id the phone made up before its first try. */
+const esIdDelMovil = (valor: unknown): valor is string => typeof valor === 'string' && UUID.test(valor)
+
 /** The id of a barco that can exist: a positive whole number that fits in the `integer` column. */
 const esIdDeBarco = (valor: unknown): valor is number =>
   typeof valor === 'number' && Number.isInteger(valor) && valor > 0 && valor <= ID_MAXIMO
 
 /** The ids the rest of the action works with: the first thing that is looked at, before the session or the database are. */
 function validarIdentificadores(entrada: { id: unknown; barcoOdooId: unknown }): void {
-  const idValido = typeof entrada.id === 'string' && UUID.test(entrada.id)
-  if (!idValido || !esIdDeBarco(entrada.barcoOdooId)) throw new ErrorParaOperario('Esa entrega no es válida. Volvé a abrir el barco.')
+  if (!esIdDelMovil(entrada.id) || !esIdDeBarco(entrada.barcoOdooId)) throw new ErrorParaOperario('Esa entrega no es válida. Volvé a abrir el barco.')
 }
 
 /** What a move of packages to another barco needs, before the session or the database are looked at. The screen makes sure of it. */
 function validarCambioDeBarco(entrada: { id: unknown; barcoOdooId: unknown; barcoDestinoOdooId: unknown; moveLineIds: unknown }): void {
-  const idValido = typeof entrada.id === 'string' && UUID.test(entrada.id)
-  if (!idValido || !esIdDeBarco(entrada.barcoOdooId) || !esIdDeBarco(entrada.barcoDestinoOdooId)) {
+  if (!esIdDelMovil(entrada.id) || !esIdDeBarco(entrada.barcoOdooId) || !esIdDeBarco(entrada.barcoDestinoOdooId)) {
     throw new ErrorParaOperario('Ese cambio de barco no es válido. Volvé a abrir el barco.')
   }
   if (entrada.barcoDestinoOdooId === entrada.barcoOdooId) throw new ErrorParaOperario(MISMO_BARCO)
@@ -167,6 +168,7 @@ export async function moverPaquetesAction(entrada: {
     const almacen = await requireAlmacenActivo(operario.id)
 
     const guardada = await sesionGuardada({ id: entrada.id, tipo: 'reasignacion', almacenId: almacen.id })
+    // The destino first: a barco that will not do is not worth a read of Odoo.
     if (!guardada && !(await barcoActivo(entrada.barcoDestinoOdooId))) throw new ErrorParaOperario(BARCO_DESTINO_DESCONOCIDO)
     const lineas = guardada ? { moveLineIds: [], pickingIds: [], paquetes: [] } : await lineasAceptadas(almacen, entrada)
 

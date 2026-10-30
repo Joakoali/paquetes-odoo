@@ -87,11 +87,9 @@ interface Particion {
   lineas: LineaRead[]
 }
 
-/** The packages that leave one delivery of the barco: what the worker notes in it. */
-export interface SalidaDeUnaEntrega {
-  entrega: EntregaDeOdoo
-  /** Each package as Odoo names it, null for a line without lot. */
-  trackingNumbers: Array<string | null>
+/** A delivery the packages were on when the reasignación was confirmed, as it is now. */
+export interface EntregaDeOrigen extends EntregaDeOdoo {
+  cancelada: boolean
 }
 
 /** What is left to do to move the packages, as `planearReasignacion` found it: what `aplicarReasignacion` does. */
@@ -102,8 +100,8 @@ export interface PlanDeReasignacion {
   movimientosEnteros: number[]
   /** Every line that goes. None when an earlier attempt moved them all. */
   lineas: number[]
-  /** What leaves each delivery, the lines that go grouped by the delivery they are on. */
-  salidas: SalidaDeUnaEntrega[]
+  /** The deliveries the packages were on when the reasignación was confirmed (`entregasOrigenIds`) that Odoo still has. */
+  entregasOrigen: EntregaDeOrigen[]
   /**
    * The deliveries of the barco that are left with nothing once the lines go, or that an earlier attempt left so: those
    * that are empty when it comes to it are cancelled at the end.
@@ -121,6 +119,16 @@ function idDe(valor: Many2one): number {
 function barcoDe(picking: PickingRead, barcoField: string): number | null {
   const barco = picking[barcoField] as Many2one | undefined
   return barco ? barco[0] : null
+}
+
+/** Whether the picking is a delivery of the barco, of the delivery type `outTypeId`, whatever its state. */
+function esEntregaDe(
+  picking: PickingRead | undefined,
+  de: { outTypeId: number; barcoOdooId: number; barcoField: string },
+): picking is PickingRead {
+  return picking !== undefined
+    && picking.picking_type_id !== false && picking.picking_type_id[0] === de.outTypeId
+    && barcoDe(picking, de.barcoField) === de.barcoOdooId
 }
 
 /** How a package is named in a message: its number, or "sin número". */
@@ -215,8 +223,8 @@ export async function planearReasignacion(entrada: {
     fields: ['name', 'state', 'picking_type_id', 'move_ids', barcoField],
   })).map((picking) => [picking.id, picking]))
 
-  const deEstaEntrega = (picking: PickingRead | undefined, barcoOdooId: number): picking is PickingRead => picking !== undefined
-    && picking.picking_type_id !== false && picking.picking_type_id[0] === outTypeId && barcoDe(picking, barcoField) === barcoOdooId
+  const deEstaEntrega = (picking: PickingRead | undefined, barcoOdooId: number): picking is PickingRead =>
+    esEntregaDe(picking, { outTypeId, barcoOdooId, barcoField })
   const pickingDe = (linea: LineaRead) => (linea.picking_id ? pickings.get(linea.picking_id[0]) : undefined)
 
   const porMover: LineaRead[] = []
@@ -274,19 +282,11 @@ export async function planearReasignacion(entrada: {
     }
   }
 
-  // What leaves each delivery, in the order of its first package.
-  const salidas = new Map<number, SalidaDeUnaEntrega>()
-  for (const linea of porMover) {
-    const picking = pickingDe(linea) as PickingRead
-    const salida = salidas.get(picking.id) ?? { entrega: { id: picking.id, ref: picking.name }, trackingNumbers: [] }
-    salida.trackingNumbers.push(linea.lot_id ? linea.lot_id[1] : null)
-    salidas.set(picking.id, salida)
-  }
-
   // A delivery of the origen is left with nothing when every move it has goes whole. One with no move at all was emptied
   // by an earlier attempt, and an empty picking is a draft in Odoo, so drafts count here.
   const enteros = new Set(movimientosEnteros)
-  const aCancelar = [...new Set([...salidas.keys(), ...entrada.entregasOrigenIds])].flatMap((id) => {
+  const deDondeSalen = porMover.map((linea) => (pickingDe(linea) as PickingRead).id)
+  const aCancelar = [...new Set([...deDondeSalen, ...entrada.entregasOrigenIds])].flatMap((id) => {
     const picking = pickings.get(id)
     if (!deEstaEntrega(picking, barcoOrigenOdooId) || ['done', 'cancel'].includes(picking.state)) return []
     return picking.move_ids.every((moveId) => enteros.has(moveId)) ? [{ id: picking.id, ref: picking.name }] : []
@@ -296,7 +296,10 @@ export async function planearReasignacion(entrada: {
     particiones,
     movimientosEnteros,
     lineas: porMover.map((linea) => linea.id),
-    salidas: [...salidas.values()],
+    entregasOrigen: entrada.entregasOrigenIds.flatMap((id) => {
+      const picking = pickings.get(id)
+      return picking ? [{ id: picking.id, ref: picking.name, cancelada: picking.state === 'cancel' }] : []
+    }),
     aCancelar,
   }
 }
@@ -423,11 +426,9 @@ export async function entregaDestino(entrada: {
       domain: [['id', '=', guardadaId]],
       fields: ['name', 'state', 'picking_type_id', barcoField],
     })
-    const sigueSiendo = guardada !== undefined
-      && guardada.picking_type_id !== false && guardada.picking_type_id[0] === outTypeId
-      && barcoDe(guardada, barcoField) === barcoOdooId
-      && !['done', 'cancel'].includes(guardada.state)
-    if (sigueSiendo) return { id: guardada.id, ref: guardada.name }
+    if (esEntregaDe(guardada, { outTypeId, barcoOdooId, barcoField }) && !['done', 'cancel'].includes(guardada.state)) {
+      return { id: guardada.id, ref: guardada.name }
+    }
   }
 
   const dominio: Dominio = [

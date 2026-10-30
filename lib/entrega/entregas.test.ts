@@ -595,8 +595,9 @@ describe('lineasRetenidas', () => {
   }
 
   /** The lines held, whatever holds them. */
+  /** The lines held, whatever holds them. */
   const retenidas = async (datos: Partial<Parameters<typeof lineasRetenidas>[0]> = {}) =>
-    new Set((await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673, ...datos })).keys())
+    new Set((await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673, ...datos })).porLinea.keys())
 
   it('holds the lines of an entrega that is still waiting for its sync: Odoo still lists them as pending', async () => {
     await entregaCon([11, 12], 'confirmada_pendiente_sync')
@@ -668,11 +669,36 @@ describe('lineasRetenidas', () => {
       await entregaCon([12, 13], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 674 })
       await entregaCon([14], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 999 })
 
-      expect(await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673 })).toEqual(new Map([
+      expect((await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673 })).porLinea).toEqual(new Map([
         [11, { tipo: 'entrega' }],
-        [12, { tipo: 'reasignacion', barcoNombre: 'MAYANQUEENIV' }],
-        [13, { tipo: 'reasignacion', barcoNombre: 'MAYANQUEENIV' }],
-        [14, { tipo: 'reasignacion', barcoNombre: 'Barco #999' }],
+        [12, { tipo: 'reasignacion', barcoOdooId: 674, barcoNombre: 'MAYANQUEENIV' }],
+        [13, { tipo: 'reasignacion', barcoOdooId: 674, barcoNombre: 'MAYANQUEENIV' }],
+        [14, { tipo: 'reasignacion', barcoOdooId: 999, barcoNombre: 'Barco #999' }],
+      ]))
+    })
+
+    it('holds the packages by their number too, those of an entrega and those of a reasignación, but not one without number', async () => {
+      const paquete = (trackingNumber: string | null) => ({ trackingNumber, courierNombre: 'DHL', pickingRef: 'MB92/OUT/00700' })
+      await entregaCon([11], 'confirmada_pendiente_sync', { paquetesDeOdoo: [paquete('T11')] })
+      await entregaCon([12, 13], 'confirmada_pendiente_sync', {
+        tipo: 'reasignacion', barcoDestinoOdooId: 674, paquetesDeOdoo: [paquete('T12'), paquete(null)],
+      })
+
+      expect((await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673 })).porNumero).toEqual(new Map([
+        ['T11', { tipo: 'entrega' }],
+        ['T12', { tipo: 'reasignacion', barcoOdooId: 674, barcoNombre: 'MAYANQUEENIV' }],
+      ]))
+    })
+
+    it('names two barcos the packages go to that are called the same by their id, as the lists do', async () => {
+      await seedBarco(db, { odooId: 935, nombre: 'H3' })
+      await seedBarco(db, { odooId: 942, nombre: 'H3' })
+      await entregaCon([12], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 935 })
+      await entregaCon([13], 'confirmada_pendiente_sync', { tipo: 'reasignacion', barcoDestinoOdooId: 942 })
+
+      expect((await lineasRetenidas({ almacenId: mb92.id, barcoOdooId: 673 })).porLinea).toEqual(new Map([
+        [12, { tipo: 'reasignacion', barcoOdooId: 935, barcoNombre: 'H3 · #935' }],
+        [13, { tipo: 'reasignacion', barcoOdooId: 942, barcoNombre: 'H3 · #942' }],
       ]))
     })
 

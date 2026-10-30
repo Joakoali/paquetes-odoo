@@ -242,7 +242,7 @@ export function EntregaFlow({ barcoOdooId, barcoNombre, almacenPrefijo, lineas, 
 
       {enviandose > 0 ? <p className="banner banner-ok" role="status">{textoDeEnviandose(enviandose)}</p> : null}
       {moviendose.map((destino) => (
-        <p key={destino.barcoNombre} className="banner banner-ok" role="status">{textoDeMoviendose(destino)}</p>
+        <p key={destino.barcoOdooId} className="banner banner-ok" role="status">{textoDeMoviendose(destino)}</p>
       ))}
 
       {aviso ? (

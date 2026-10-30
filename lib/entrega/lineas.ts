@@ -20,12 +20,33 @@ export const PAQUETES_MOVIENDOSE = 'Algunos paquetes ya se están pasando a otro
 
 /**
  * Why a line Odoo lists as waiting for the barco is taken: an entrega on its way to Odoo hands it over, or a reasignación
- * on its way moves it to the barco `barcoNombre`.
+ * on its way moves it to the barco `barcoOdooId`, which the screen calls `barcoNombre` (its name, with its id when another
+ * barco the packages go to has the same name).
  */
-export type Retencion = { tipo: 'entrega' } | { tipo: 'reasignacion'; barcoNombre: string }
+export type Retencion = { tipo: 'entrega' } | { tipo: 'reasignacion'; barcoOdooId: number; barcoNombre: string }
+
+/**
+ * What the entregas and reasignaciones on their way to Odoo have taken of a barco: by line and by package. Odoo can make a
+ * line again under another id before the worker gets to it (the backorder of an entrega that validated the delivery the
+ * line was on), and its package is still taken.
+ */
+export interface Retenidas {
+  porLinea: ReadonlyMap<number, Retencion>
+  porNumero: ReadonlyMap<string, Retencion>
+}
+
+/** Nothing taken. */
+export const NADA_RETENIDO: Retenidas = { porLinea: new Map(), porNumero: new Map() }
+
+/** Why the line is taken, by its id or by its package; undefined when it is not. A line without number goes by its id alone. */
+export function retencionDe(retenidas: Retenidas, linea: Pick<LineaEntrega, 'moveLineId' | 'trackingNumber'>): Retencion | undefined {
+  return retenidas.porLinea.get(linea.moveLineId)
+    ?? (linea.trackingNumber === null ? undefined : retenidas.porNumero.get(linea.trackingNumber))
+}
 
 /** The packages a reasignación on its way to Odoo takes to a barco: what the screen says of them, barco by barco. */
 export interface Moviendose {
+  barcoOdooId: number
   barcoNombre: string
   paquetes: number
 }
@@ -33,22 +54,28 @@ export interface Moviendose {
 /**
  * What to offer of the lines Odoo has waiting: those that no entrega or reasignación on its way to Odoo (`retenidas`) has
  * taken, in their order. And, of the lines Odoo lists that are held, how many are being handed over and how many go to
- * each other barco, in the order of their first line, so that the screen can say they are on their way.
+ * each other barco (by its id: two barcos can have the same name), in the order of their first line, so that the screen
+ * can say they are on their way.
  */
 export function separarRetenidas(
   pendientes: readonly LineaEntrega[],
-  retenidas: ReadonlyMap<number, Retencion>,
+  retenidas: Retenidas,
 ): { disponibles: LineaEntrega[]; enviandose: number; moviendose: Moviendose[] } {
   const disponibles: LineaEntrega[] = []
   let enviandose = 0
-  const porBarco = new Map<string, number>()
+  const porBarco = new Map<number, Moviendose>()
   for (const linea of pendientes) {
-    const retencion = retenidas.get(linea.moveLineId)
+    const retencion = retencionDe(retenidas, linea)
     if (!retencion) disponibles.push(linea)
     else if (retencion.tipo === 'entrega') enviandose += 1
-    else porBarco.set(retencion.barcoNombre, (porBarco.get(retencion.barcoNombre) ?? 0) + 1)
+    else {
+      const { barcoOdooId, barcoNombre } = retencion
+      const destino = porBarco.get(barcoOdooId) ?? { barcoOdooId, barcoNombre, paquetes: 0 }
+      destino.paquetes += 1
+      porBarco.set(barcoOdooId, destino)
+    }
   }
-  return { disponibles, enviandose, moviendose: [...porBarco].map(([barcoNombre, paquetes]) => ({ barcoNombre, paquetes })) }
+  return { disponibles, enviandose, moviendose: [...porBarco.values()] }
 }
 
 /**
@@ -63,19 +90,20 @@ export function separarRetenidas(
 export function resolverElegidas(entrada: {
   pedidas: unknown
   pendientes: readonly LineaEntrega[]
-  retenidas: ReadonlyMap<number, Retencion>
+  retenidas: Retenidas
 }): { moveLineIds: number[]; pickingIds: number[]; paquetes: PaqueteDeOdoo[] } {
   const { pedidas, pendientes, retenidas } = entrada
   if (!Array.isArray(pedidas)) throw new ErrorParaOperario(PAQUETES_YA_NO_PENDIENTES)
 
   const quePendientes = new Set(pendientes.map((linea) => linea.moveLineId))
   if (pedidas.some((id) => !quePendientes.has(id))) throw new ErrorParaOperario(PAQUETES_YA_NO_PENDIENTES)
-  const tomadas = pedidas.flatMap((id) => retenidas.get(id) ?? [])
-  if (tomadas.some((retencion) => retencion.tipo === 'entrega')) throw new ErrorParaOperario(PAQUETES_EN_ENVIO)
-  if (tomadas.length > 0) throw new ErrorParaOperario(PAQUETES_MOVIENDOSE)
 
   const pedidasSet = new Set<unknown>(pedidas)
   const elegidas = pendientes.filter((linea) => pedidasSet.has(linea.moveLineId))
+  const tomadas = elegidas.flatMap((linea) => retencionDe(retenidas, linea) ?? [])
+  if (tomadas.some((retencion) => retencion.tipo === 'entrega')) throw new ErrorParaOperario(PAQUETES_EN_ENVIO)
+  if (tomadas.length > 0) throw new ErrorParaOperario(PAQUETES_MOVIENDOSE)
+
   return {
     moveLineIds: elegidas.map((linea) => linea.moveLineId),
     pickingIds: [...new Set(elegidas.map((linea) => linea.pickingId))],

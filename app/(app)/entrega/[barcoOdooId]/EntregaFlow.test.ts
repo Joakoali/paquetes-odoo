@@ -84,14 +84,14 @@ describe('EntregaFlow, the packages of another barco', () => {
   })
 
   it('says how many packages are on their way to which barco', () => {
-    const html = dibujar(siete.slice(0, 3), '', [{ barcoNombre: 'ARCTIC', paquetes: 2 }, { barcoNombre: 'H3 · #935', paquetes: 1 }])
+    const html = dibujar(siete.slice(0, 3), '', [{ barcoOdooId: 674, barcoNombre: 'ARCTIC', paquetes: 2 }, { barcoOdooId: 935, barcoNombre: 'H3 · #935', paquetes: 1 }])
 
     expect(html).toContain('2 paquetes pasándose a ARCTIC')
     expect(html).toContain('1 paquete pasándose a H3 · #935')
   })
 
   it('says that nothing is left, and not that Odoo has nothing, when every package is on its way to another barco', () => {
-    const html = dibujar([], '', [{ barcoNombre: 'ARCTIC', paquetes: 2 }])
+    const html = dibujar([], '', [{ barcoOdooId: 674, barcoNombre: 'ARCTIC', paquetes: 2 }])
 
     expect(html).toContain('No quedan más paquetes para entregar.')
     expect(html).not.toContain('Odoo no tiene paquetes')

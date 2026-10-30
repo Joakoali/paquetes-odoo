@@ -19,7 +19,7 @@ describe('the texts of moving packages to another barco', () => {
   })
 
   it('says how many packages are on their way to a barco', () => {
-    expect(textoDeMoviendose({ barcoNombre: 'ARCTIC', paquetes: 1 })).toBe('1 paquete pasándose a ARCTIC')
-    expect(textoDeMoviendose({ barcoNombre: 'ARCTIC', paquetes: 4 })).toBe('4 paquetes pasándose a ARCTIC')
+    expect(textoDeMoviendose({ barcoOdooId: 674, barcoNombre: 'ARCTIC', paquetes: 1 })).toBe('1 paquete pasándose a ARCTIC')
+    expect(textoDeMoviendose({ barcoOdooId: 674, barcoNombre: 'ARCTIC', paquetes: 4 })).toBe('4 paquetes pasándose a ARCTIC')
   })
 })

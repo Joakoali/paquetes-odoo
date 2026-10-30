@@ -193,6 +193,54 @@ describe('syncReasignacionSession', () => {
     })
   })
 
+  it('notes both deliveries on a retry when the packages moved and the run was cut before its notes', async () => {
+    odooConEntregas({ conEntregaDeArctic: true })
+    const sesion = await crearReasignacion([1, 2, 4])
+    // The split of the GLS move, then the hand-over to ARCTIC: the answer to the second write is lost.
+    odoo.cortarTrasEscrituras = 1
+    await expect(syncReasignacionSession(sesion.id)).rejects.toThrow()
+    expect(odoo.pickings.get(800)?.notas).toEqual([])
+
+    await syncReasignacionSession(sesion.id)
+
+    expect(odoo.pickings.get(800)?.notas).toEqual([
+      'Se pasaron 3 paquete(s) de MAYANQUEEN (MB92/OUT/00700) vía Webapp Paquetería por Veronika: QA-DHL-001, QA-DHL-002, QA-GLS-002',
+    ])
+    expect(odoo.pickings.get(700)?.notas).toEqual([
+      'Se pasaron 3 paquete(s) a ARCTIC (MB92/OUT/00800) vía Webapp Paquetería por Veronika: QA-DHL-001, QA-DHL-002, QA-GLS-002',
+    ])
+    expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
+  })
+
+  it('says a delivery was cancelled on a retry too, when an earlier run emptied and cancelled it before its notes', async () => {
+    odooConEntregas({ conEntregaDeArctic: true })
+    const sesion = await crearReasignacion([1, 2, 3, 4, 5])
+    // The hand-over, then the cancel of the emptied 700: the answer to the cancel is lost.
+    odoo.cortarTrasEscrituras = 1
+    await expect(syncReasignacionSession(sesion.id)).rejects.toThrow()
+    expect(odoo.estadoDe(700)).toBe('cancel')
+
+    await syncReasignacionSession(sesion.id)
+
+    expect(odoo.pickings.get(700)?.notas).toEqual([
+      'Se pasaron 5 paquete(s) a ARCTIC (MB92/OUT/00800) vía Webapp Paquetería por Veronika: '
+        + 'QA-DHL-001, QA-DHL-002, QA-GLS-001, QA-GLS-002, QA-GLS-003. La entrega quedó vacía y se canceló.',
+    ])
+  })
+
+  it('notes nothing when the webapp moved nothing: somebody had already put the packages on the destino', async () => {
+    odooConEntregas({ conEntregaDeArctic: true })
+    odoo.movimientos.get(100)!.picking = 800
+    odoo.lineas.get(1)!.picking = 800
+    odoo.lineas.get(2)!.picking = 800
+    const sesion = await crearReasignacion([1, 2])
+
+    await syncReasignacionSession(sesion.id)
+
+    expect(odoo.escriturasHechas()).toEqual([])
+    expect((await filaSesion(sesion.id)).estado).toBe('sincronizada')
+  })
+
   it('leaves every move asking for what it has reserved: no phantom line on either barco', async () => {
     odooConEntregas({ conEntregaDeArctic: true })
     const sesion = await crearReasignacion([2, 4])
@@ -220,6 +268,13 @@ describe('syncReasignacionSession', () => {
 
     expect(odoo.lineas.get(51)?.picking).toBe(800)
     expect(odoo.estadoDe(701)).toBe('cancel')
+    // The note goes to the delivery it was on when it was confirmed; the backorder it left empty says it was cancelled.
+    expect(odoo.pickings.get(700)?.notas).toEqual([
+      'Se pasaron 1 paquete(s) a ARCTIC (MB92/OUT/00800) vía Webapp Paquetería por Veronika: QA-DHL-002',
+    ])
+    expect(odoo.pickings.get(701)?.notas).toEqual([
+      'La entrega quedó vacía al pasar sus paquetes a ARCTIC y se canceló (vía Webapp Paquetería por Veronika).',
+    ])
   })
 
   it('writes nothing in Odoo, and leaves the sesión as it was, for a package that is not waiting any more', async () => {

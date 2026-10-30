@@ -8,7 +8,7 @@ import { inicioDeHoy } from '../fechas'
 import { getBarcosConEntregaPendiente } from '../odoo/pickings'
 import { publishSync } from '../queue/publish'
 import { contarSinEnviarPorBarco } from '../recepcion/recepciones'
-import type { Retencion } from './lineas'
+import type { Retencion, Retenidas } from './lineas'
 
 /**
  * What a barco is called: its name in the cache, or, for one the cache does not know (created in Odoo since the last
@@ -209,11 +209,15 @@ export async function sesionGuardada(entrada: { id: string; tipo: TipoConfirmado
 }
 
 /**
- * The move lines of the barco in the almacén that an entrega or a reasignación still waiting for its sync
- * (`confirmada_pendiente_sync`) has taken, each with why: an entrega hands it over, a reasignación moves it to the barco
- * its `Retencion` names. The worker has not got to them yet, so Odoo still lists those lines as waiting for the barco: they
- * must not be offered again, nor accepted by a second entrega or reasignación, or the same packages would be handed over
- * twice, or handed over while they are being moved.
+ * What of the barco in the almacén an entrega or a reasignación still waiting for its sync (`confirmada_pendiente_sync`)
+ * has taken, each with why: an entrega hands it over, a reasignación moves it to the barco its `Retencion` names. The
+ * worker has not got to them yet, so Odoo still lists those packages as waiting for the barco: they must not be offered
+ * again, nor accepted by a second entrega or reasignación, or the same packages would be handed over twice, or handed
+ * over while they are being moved.
+ *
+ * They are held by line and by package (`Retenidas`): before the worker gets to a sesión, Odoo can make one of its lines
+ * again under another id, and the package is still taken. A sesión confirmed before the entregas kept their packages is
+ * held by its lines alone.
  *
  * Only that estado holds. A synced sesión's lines are no longer pending for the barco in Odoo, and one that failed did
  * nothing with them: they go back through Pendientes, and meanwhile they are not stuck.
@@ -225,10 +229,11 @@ export async function lineasRetenidas(entrada: {
   almacenId: number
   barcoOdooId: number
   exceptoId?: string
-}): Promise<Map<number, Retencion>> {
+}): Promise<Retenidas> {
   const filas = await db.select({
     tipo: sesionesEscaneo.tipo,
     lineas: sesionesEscaneo.odooMoveLineIds,
+    paquetes: sesionesEscaneo.paquetesDeOdoo,
     barcoDestinoOdooId: sesionesEscaneo.barcoDestinoOdooId,
     barcoDestinoNombre: barcosCache.nombre,
   })
@@ -242,14 +247,29 @@ export async function lineasRetenidas(entrada: {
       entrada.exceptoId === undefined ? undefined : ne(sesionesEscaneo.id, entrada.exceptoId),
     ))
 
-  const retenidas = new Map<number, Retencion>()
+  // The barcos the packages go to, each once, by the rule of the lists: the name, with the id when two are called the same.
+  const destinos = new Map<number, string>()
   for (const fila of filas) {
-    const retencion: Retencion = fila.tipo === 'reasignacion' && fila.barcoDestinoOdooId !== null
-      ? { tipo: 'reasignacion', barcoNombre: nombreDelBarco(fila.barcoDestinoNombre, fila.barcoDestinoOdooId) }
-      : { tipo: 'entrega' }
-    for (const linea of fila.lineas ?? []) retenidas.set(linea, retencion)
+    if (fila.tipo === 'reasignacion' && fila.barcoDestinoOdooId !== null) {
+      destinos.set(fila.barcoDestinoOdooId, nombreDelBarco(fila.barcoDestinoNombre, fila.barcoDestinoOdooId))
+    }
   }
-  return retenidas
+  const etiquetas = etiquetasDeBarcos([...destinos].map(([odooId, nombre]) => ({ odooId, nombre })))
+  const etiquetaDe = new Map([...destinos.keys()].map((odooId, posicion) => [odooId, etiquetas[posicion]]))
+
+  const porLinea = new Map<number, Retencion>()
+  const porNumero = new Map<string, Retencion>()
+  for (const fila of filas) {
+    const destino = fila.tipo === 'reasignacion' ? fila.barcoDestinoOdooId : null
+    const retencion: Retencion = destino === null
+      ? { tipo: 'entrega' }
+      : { tipo: 'reasignacion', barcoOdooId: destino, barcoNombre: etiquetaDe.get(destino) ?? nombreDelBarco(null, destino) }
+    for (const linea of fila.lineas ?? []) porLinea.set(linea, retencion)
+    for (const { trackingNumber } of fila.paquetes ?? []) {
+      if (trackingNumber !== null) porNumero.set(trackingNumber, retencion)
+    }
+  }
+  return { porLinea, porNumero }
 }
 
 /** An entrega confirmed today. */

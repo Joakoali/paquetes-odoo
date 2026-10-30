@@ -168,7 +168,7 @@ describe('planearReasignacion and aplicarReasignacion', () => {
 
     const { plan, canceladas } = await mover(paquetes(1))
 
-    expect(plan).toMatchObject({ lineas: [], movimientosEnteros: [], salidas: [], aCancelar: [] })
+    expect(plan).toMatchObject({ lineas: [], movimientosEnteros: [], aCancelar: [] })
     expect(canceladas).toEqual([])
     expect(odoo.escriturasHechas()).toEqual([])
   })
@@ -229,16 +229,15 @@ describe('planearReasignacion and aplicarReasignacion', () => {
     expect(odoo.lineasDe(700).map((linea) => linea.id)).toEqual([1, 2, 3])
   })
 
-  it('says what leaves each delivery, for the notes', async () => {
-    odoo.entrega({ id: 701, barco: ORIGEN })
+  it('says how the deliveries the packages were on when it was confirmed are now, for the notes, those Odoo still has', async () => {
+    odoo.entrega({ id: 701, barco: ORIGEN, cerrado: 'cancel' })
     odoo.movimiento({ id: 100, picking: 700, lineas: [1, 2] })
-    odoo.movimiento({ id: 101, picking: 701, lineas: [3], lotes: [null] })
 
-    const plan = await planear(paquetes(1, 3))
+    const plan = await planear(paquetes(1), [700, 701, 799])
 
-    expect(plan.salidas).toEqual([
-      { entrega: { id: 700, ref: 'MB92/OUT/00700' }, trackingNumbers: ['T1'] },
-      { entrega: { id: 701, ref: 'MB92/OUT/00701' }, trackingNumbers: [null] },
+    expect(plan.entregasOrigen).toEqual([
+      { id: 700, ref: 'MB92/OUT/00700', cancelada: false },
+      { id: 701, ref: 'MB92/OUT/00701', cancelada: true },
     ])
   })
 })

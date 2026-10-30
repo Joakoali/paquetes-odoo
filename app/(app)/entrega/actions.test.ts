@@ -22,7 +22,7 @@ import { requireOperarioFromCookies } from '@/lib/auth/current-operario'
 import { UnauthorizedError } from '@/lib/auth/guards'
 import { barcoActivo } from '@/lib/cache/barcos'
 import { lineasRetenidas, registrarEntrega, sesionGuardada } from '@/lib/entrega/entregas'
-import type { Retencion } from '@/lib/entrega/lineas'
+import { NADA_RETENIDO, type Retencion } from '@/lib/entrega/lineas'
 import { registrarReasignacion } from '@/lib/entrega/reasignaciones'
 import { ErrorParaOperario, OdooError } from '@/lib/errores'
 import { getLineasEntregaPendiente, type LineaEntrega } from '@/lib/odoo/pickings'
@@ -75,13 +75,13 @@ beforeEach(() => {
   vi.mocked(requireOperarioFromCookies).mockResolvedValue(operario)
   vi.mocked(requireAlmacenActivo).mockResolvedValue(mb92)
   vi.mocked(getLineasEntregaPendiente).mockResolvedValue(lineasEnOdoo)
-  vi.mocked(lineasRetenidas).mockResolvedValue(new Map())
+  vi.mocked(lineasRetenidas).mockResolvedValue(NADA_RETENIDO)
   vi.mocked(sesionGuardada).mockResolvedValue(false)
   vi.mocked(barcoActivo).mockResolvedValue(true)
 })
 
 /** The lines an entrega on its way to Odoo holds. */
-const deEntregas = (...lineas: number[]) => new Map<number, Retencion>(lineas.map((id) => [id, { tipo: 'entrega' }]))
+const deEntregas = (...lineas: number[]) => ({ porLinea: new Map<number, Retencion>(lineas.map((id) => [id, { tipo: 'entrega' }])), porNumero: new Map() })
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -557,7 +557,7 @@ describe('moverPaquetesAction', () => {
     vi.mocked(lineasRetenidas).mockResolvedValue(deEntregas(12))
     expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: EN_ENVIO })
 
-    vi.mocked(lineasRetenidas).mockResolvedValue(new Map([[21, { tipo: 'reasignacion', barcoNombre: 'H3' }]]))
+    vi.mocked(lineasRetenidas).mockResolvedValue({ porLinea: new Map([[21, { tipo: 'reasignacion', barcoOdooId: 935, barcoNombre: 'H3' }]]), porNumero: new Map() })
     expect(await moverPaquetesAction(cambio())).toEqual({ ok: false, error: MOVIENDOSE })
     noSeRegistro()
   })

@@ -217,7 +217,7 @@ COMMIT;
 ## 7. Notas
 
 - **Requests:** cada cambio de barco son de 7 a 9 requests a Odoo (unos 7–9 s), siempre por la cola. Mientras tanto, los paquetes no se ofrecen para entregar en A ("pasándose a B").
-- **Notas en Odoo:** cada corrida del worker anota lo que hizo. Si una corrida se corta entre las dos notas y se reintenta, la segunda nota no se escribe. Pasa lo mismo con las entregas.
+- **Notas en Odoo:** las escribe la corrida del worker que termina el envío, con lo que movió la sesión. Si una corrida se corta después de mover los paquetes, el reintento escribe las notas igual. Si se corta entre dos notas, la primera queda escrita dos veces.
 - **Qué no cubre:**
   - paquetes ya entregados;
   - mover entre almacenes (el paquete está físicamente en uno);
